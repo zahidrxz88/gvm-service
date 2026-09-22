@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>GVM AV Systems</title>
+<style>
+  :root {
+    --bg: #0B0E0C;
+    --bar-bg: rgba(15, 18, 16, 0.92);
+    --border: #262B27;
+    --text: #E7ECE9;
+    --muted: #8A928C;
+    --accent: #4ADE9C;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: var(--text);
+  }
+
+  #switcher-bar {
+    position: fixed;
+    top: env(safe-area-inset-top, 0px);
+    right: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    pointer-events: none; /* only the pill itself is interactive */
+  }
+  #switcher-pill {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    background: var(--bar-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px;
+    gap: 2px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    backdrop-filter: blur(6px);
+  }
+  .switch-btn {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 7px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease, color .15s ease;
+  }
+  .switch-btn:hover {
+    color: var(--text);
+  }
+  .switch-btn.active {
+    background: var(--accent);
+    color: #06110B;
+  }
+
+  .frame-wrap {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .frame-wrap.hidden {
+    display: none;
+  }
+  iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+    background: var(--bg);
+  }
+
+  @media (max-width: 480px) {
+    .switch-btn { padding: 7px 10px; font-size: 11.5px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="switcher-bar">
+  <div id="switcher-pill">
+    <button class="switch-btn" id="btn-gvm" onclick="showApp('gvm')">PM Tracker</button>
+    <button class="switch-btn" id="btn-adhoc" onclick="showApp('adhoc')">Adhoc / Token</button>
+  </div>
+</div>
+
+<div class="frame-wrap" id="wrap-gvm">
+  <iframe id="frame-gvm" src="gvm-tracker.html" title="GVM PM Tracker"></iframe>
+</div>
+
+<div class="frame-wrap hidden" id="wrap-adhoc">
+  <!-- lazy-loaded: src is only set the first time this dashboard is opened -->
+  <iframe id="frame-adhoc" data-src="adhoc-token.html" title="Adhoc / Token System"></iframe>
+</div>
+
+<script>
+  // Always starts on the GVM PM Tracker, every load. No preference is remembered
+  // on purpose, per the "always default to PM Tracker on startup" requirement.
+  function showApp(name) {
+    var wraps = { gvm: document.getElementById('wrap-gvm'), adhoc: document.getElementById('wrap-adhoc') };
+    var btns  = { gvm: document.getElementById('btn-gvm'),  adhoc: document.getElementById('btn-adhoc')  };
+
+    Object.keys(wraps).forEach(function(key) {
+      wraps[key].classList.toggle('hidden', key !== name);
+      btns[key].classList.toggle('active', key === name);
+    });
+
+    // Lazy-load the adhoc dashboard's iframe only the first time it's opened,
+    // so first paint of the default (PM Tracker) dashboard isn't slowed down.
+    var adhocFrame = document.getElementById('frame-adhoc');
+    if (name === 'adhoc' && !adhocFrame.getAttribute('src')) {
+      adhocFrame.setAttribute('src', adhocFrame.getAttribute('data-src'));
+    }
+  }
+
+  showApp('gvm');
+</script>
+
+</body>
+</html>

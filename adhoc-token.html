@@ -1,0 +1,2045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Adhoc / Token System</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0B0E0C; }
+  body { font-family: 'Space Grotesk', sans-serif; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  ::selection { background: #4ADE9C; color: #0B0E0C; }
+  input, textarea, select { font-family: 'Space Grotesk', sans-serif; }
+  .jack { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 2px #0B0E0C; }
+  .jack-glow { box-shadow: 0 0 6px currentColor, 0 0 0 2px #0B0E0C; }
+  @keyframes pulseDot {
+    0%, 100% { opacity: 1; box-shadow: 0 0 6px currentColor, 0 0 0 2px #0B0E0C; }
+    50% { opacity: 0.35; box-shadow: 0 0 14px currentColor, 0 0 0 2px #0B0E0C; }
+  }
+  .jack-pulse { animation: pulseDot 1.6s ease-in-out infinite; }
+  button { font-family: inherit; cursor: pointer; }
+  .scrollbar::-webkit-scrollbar { width: 6px; }
+  .scrollbar::-webkit-scrollbar-thumb { background: #262B27; border-radius: 3px; }
+  .type-btn { transition: background .15s, border-color .15s, color .15s; }
+  @media (max-width: 480px) {
+    .hide-mobile { display: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+// ============ SUPABASE CONFIG (this app's own dedicated project) ============
+const SUPABASE_URL = "https://jkwakavosclpnbtyyltx.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imprd2FrYXZvc2NscG5idHl5bHR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk4NDcwMDcsImV4cCI6MjEwNTQyMzAwN30.NNgTpapEFBInQRaekXCN34HIN0UkGTW7oznn2PoVkH0";
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// kvGet/kvSet ride on the current Supabase Auth session automatically -- no session, no access (kv_store RLS requires authenticated)
+async function kvGet(key) {
+  const { data, error } = await sb.from("kv_store").select("value").eq("key", key).maybeSingle();
+  if (error) throw error;
+  return data ? data.value : null;
+}
+async function kvSet(key, value) {
+  const { error } = await sb.from("kv_store").upsert({ key, value, updated_at: new Date().toISOString() });
+  if (error) throw error;
+}
+
+// dedicated keys so this app never collides with any other tracker on the same project
+const KV_REQUESTS = "adhoc_token_requests";
+const KV_RATE_CARD = "adhoc_token_rate_card";
+const KV_CLIENTS = "adhoc_token_clients";
+const KV_PRESENCE = "adhoc_token_presence";
+const KV_ACTIVITY = "adhoc_token_activity";
+
+// ============ tiny icon set ============
+function Icon({ size = 16, color = "currentColor", children }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {children}
+    </svg>
+  );
+}
+const Plus = p => <Icon {...p}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></Icon>;
+const XIcon = p => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></Icon>;
+const Pencil = p => <Icon {...p}><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></Icon>;
+const Trash2 = p => (
+  <Icon {...p}>
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" /><path d="M14 11v6" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </Icon>
+);
+const CheckCircle2 = p => <Icon {...p}><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></Icon>;
+const AlertTriangle = p => (
+  <Icon {...p}>
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+    <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+  </Icon>
+);
+const Clock = p => <Icon {...p}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></Icon>;
+const Shield = p => <Icon {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /></Icon>;
+const Ticket = p => (
+  <Icon {...p}>
+    <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" />
+    <path d="M9 5v14" strokeDasharray="2 2" />
+  </Icon>
+);
+const UsersIcon = p => (
+  <Icon {...p}>
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </Icon>
+);
+const ListIcon = p => (
+  <Icon {...p}>
+    <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+    <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+  </Icon>
+);
+const Download = p => (
+  <Icon {...p}>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+  </Icon>
+);
+
+// ---------- date helpers ----------
+const MS_DAY = 86400000;
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const parseD = s => new Date(s + "T00:00:00");
+const fmtShort = s => parseD(s).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+const daysBetween = (a, b) => Math.round((b - a) / MS_DAY);
+
+function slotStatus(slot) {
+  if (slot.completed) return "done";
+  if (!slot.date) return "unselected";
+  const today = parseD(todayStr());
+  const d = parseD(slot.date);
+  const diff = daysBetween(today, d);
+  if (diff < 0) return "overdue";
+  if (diff <= 30) return "due-soon";
+  return "scheduled";
+}
+const STATUS_COLOR = {
+  done: "#4ADE9C",
+  overdue: "#F2545B",
+  "due-soon": "#F5A623",
+  scheduled: "#3A423C",
+  unselected: "#F5A623"
+};
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+function slotCountFor(form) {
+  return 1; // one schedulable visit slot per request (adhoc or a token job-request)
+}
+function buildSlots(form, existing = [], isAccount = false) {
+  if (isAccount) return []; // an Active Tokens account isn't a job, no scheduling
+  const count = slotCountFor(form);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    out.push(existing[i] ? existing[i] : { id: uid(), date: form.requestDate || null, completed: false });
+  }
+  return out;
+}
+
+function csvEscape(val) {
+  const s = val == null ? "" : String(val);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function toCsv(rows) {
+  return rows.map(row => row.map(csvEscape).join(",")).join("\r\n");
+}
+function downloadCsv(filename, rows) {
+  const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+const emptyForm = {
+  refNo: "",
+  client: "",
+  city: "",
+  address: "",
+  region: "",
+  scope: "",
+  type: "adhoc",
+  tokenCount: "",
+  requestDate: todayStr(),
+  startTime: "",
+  endTime: ""
+};
+const emptyRateForm = { client: "", region: "", city: "", hourRateWeekdayBiz: "", hourRateWeekdayAfter: "", hourRateWeekend: "" };
+const emptyRateInputs = { hourRateWeekdayBiz: "", hourRateWeekdayAfter: "", hourRateWeekend: "" };
+const HOUR_TIERS = [
+  { value: "weekday_biz", label: "Weekday Business Hours", rateField: "hourRateWeekdayBiz" },
+  { value: "weekday_after", label: "Weekday After Office Hours", rateField: "hourRateWeekdayAfter" },
+  { value: "weekend", label: "Weekend", rateField: "hourRateWeekend" }
+];
+function findRate(rateCard, client, city) {
+  if (!client || !city) return null;
+  const cNeedle = client.trim().toLowerCase();
+  const tNeedle = city.trim().toLowerCase();
+  return rateCard.find(r => r.client.trim().toLowerCase() === cNeedle && (r.city || "").trim().toLowerCase() === tNeedle) || null;
+}
+function allCities(rateCard) {
+  return [...new Set(rateCard.map(r => r.city).filter(Boolean))].sort();
+}
+const BUSINESS_HOURS_START = "09:00";
+const BUSINESS_HOURS_END = "18:00";
+function deriveHourTier(requestDate, startTime) {
+  if (!requestDate || !startTime) return null;
+  const day = parseD(requestDate).getDay(); // 0 = Sun, 6 = Sat
+  if (day === 0 || day === 6) return "weekend";
+  return (startTime >= BUSINESS_HOURS_START && startTime < BUSINESS_HOURS_END) ? "weekday_biz" : "weekday_after";
+}
+function hoursBetween(startTime, endTime) {
+  if (!startTime || !endTime) return null;
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+  const mins = (eh * 60 + em) - (sh * 60 + sm);
+  return mins > 0 ? mins / 60 : null;
+}
+// a token request is an "account" (Active Tokens) only from the new-client flow, not a
+// regular Add Request (which is a job, even for Token type). Legacy rows saved before this
+// flag existed never had Start/End Time either, so treat those as accounts too.
+function isTokenAccount(r) {
+  if (r.type !== "token") return false;
+  if (typeof r.isAccount === "boolean") return r.isAccount;
+  return !r.startTime && !r.endTime;
+}
+// computes the dollar cost (hours x the matching rate-card hourly rate) a token job-request
+// would deduct, without applying it. Returns null when it can't be computed yet.
+function computeJobCost(r, rateCard) {
+  const hrs = hoursBetween(r.startTime, r.endTime);
+  if (hrs == null) return null;
+  const tier = deriveHourTier(r.requestDate, r.startTime);
+  const tierInfo = HOUR_TIERS.find(t => t.value === tier) || HOUR_TIERS[0];
+  const matched = findRate(rateCard, r.client, r.city);
+  const rate = matched ? matched[tierInfo.rateField] : null;
+  if (rate == null) return null;
+  return Math.round(rate * hrs * 100) / 100;
+}
+// finds every token job-request whose Request Date has fully passed and hasn't had its
+// deduction applied yet, and subtracts its dollar cost from the matching client+city
+// Active Tokens account balance. Requests with no computable cost yet (missing hours) are
+// marked applied with $0 so they don't get re-checked forever; requests missing a rate or a
+// matching account are left pending so a later sweep can pick them up once one exists.
+function sweepMaturedDeductions(requests, rateCard) {
+  const today = todayStr();
+  const accountIndexByKey = new Map();
+  requests.forEach((r, i) => {
+    if (isTokenAccount(r)) {
+      const key = r.client.trim().toLowerCase() + "|" + (r.city || "").trim().toLowerCase();
+      if (!accountIndexByKey.has(key)) accountIndexByKey.set(key, i);
+    }
+  });
+  const deltas = new Map();
+  const applied = [];
+  let changed = false;
+  const updated = requests.map(r => {
+    if (r.type !== "token" || isTokenAccount(r) || r.deductionApplied || !(r.requestDate < today)) return r;
+    const hrs = hoursBetween(r.startTime, r.endTime);
+    if (hrs == null) { changed = true; return { ...r, deductionApplied: true, deductedAmount: 0 }; }
+    const cost = computeJobCost(r, rateCard);
+    if (cost == null) return r; // no rate on file yet -- retry on a later sweep
+    const key = r.client.trim().toLowerCase() + "|" + (r.city || "").trim().toLowerCase();
+    const accountIdx = accountIndexByKey.get(key);
+    if (accountIdx == null) return r; // no matching account yet -- retry on a later sweep
+    deltas.set(accountIdx, (deltas.get(accountIdx) || 0) + cost);
+    changed = true;
+    applied.push({ client: r.client, city: r.city, refNo: r.refNo, amount: cost });
+    return { ...r, deductionApplied: true, deductedAmount: cost };
+  });
+  if (!changed) return null;
+  const final = updated.map((r, i) => {
+    if (!deltas.has(i)) return r;
+    return { ...r, tokenCount: Math.round(Math.max(0, (r.tokenCount || 0) - deltas.get(i)) * 100) / 100 };
+  });
+  return { requests: final, applied };
+}
+const ROLE_COLOR = { superadmin: "#4ADE9C", admin: "#6E9FB0", guest: "#8B948E" };
+const ROLE_LABEL = { superadmin: "Super Admin", admin: "Admin", guest: "Guest" };
+function initials(first, last) {
+  const a = (first || "").trim().charAt(0).toUpperCase();
+  const b = (last || "").trim().charAt(0).toUpperCase();
+  return (a + b) || "?";
+}
+function fullName(u) {
+  return u ? `${u.firstName} ${u.lastName}`.trim() : "";
+}
+function mapProfile(p) {
+  return { id: p.id, firstName: p.first_name || "", lastName: p.last_name || "", role: p.role, email: p.email };
+}
+function fmtDateTime(iso) {
+  return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+const PRESENCE_WINDOW_MS = 60000;
+const COUNTRIES = ["Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan", "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina", "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso", "Burundi", "Cabo Verde", "Cambodia", "Cameroon", "Canada", "Central African Republic", "Chad", "Chile", "China", "Colombia", "Comoros", "Congo (Brazzaville)", "Congo (Kinshasa)", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czechia", "Denmark", "Djibouti", "Dominica", "Dominican Republic", "Ecuador", "Egypt", "El Salvador", "Equatorial Guinea", "Eritrea", "Estonia", "Eswatini", "Ethiopia", "Fiji", "Finland", "France", "Gabon", "Gambia", "Georgia", "Germany", "Ghana", "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana", "Haiti", "Honduras", "Hungary", "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland", "Israel", "Italy", "Ivory Coast", "Jamaica", "Japan", "Jordan", "Kazakhstan", "Kenya", "Kiribati", "Kosovo", "Kuwait", "Kyrgyzstan", "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg", "Madagascar", "Malawi", "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius", "Mexico", "Micronesia", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco", "Mozambique", "Myanmar", "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand", "Nicaragua", "Niger", "Nigeria", "North Korea", "North Macedonia", "Norway", "Oman", "Pakistan", "Palau", "Palestine", "Panama", "Papua New Guinea", "Paraguay", "Peru", "Philippines", "Poland", "Portugal", "Qatar", "Romania", "Russia", "Rwanda", "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines", "Samoa", "San Marino", "Sao Tome and Principe", "Saudi Arabia", "Senegal", "Serbia", "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands", "Somalia", "South Africa", "South Korea", "South Sudan", "Spain", "Sri Lanka", "Sudan", "Suriname", "Sweden", "Switzerland", "Syria", "Taiwan", "Tajikistan", "Tanzania", "Thailand", "Timor-Leste", "Togo", "Tonga", "Trinidad and Tobago", "Tunisia", "Turkey", "Turkmenistan", "Tuvalu", "Uganda", "Ukraine", "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan", "Vanuatu", "Vatican City", "Venezuela", "Vietnam", "Yemen", "Zambia", "Zimbabwe"];
+
+function Dashboard() {
+  const [requests, setRequests] = useState([]);
+  const [rateCard, setRateCard] = useState([]);
+  const [clientsList, setClientsList] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [formSaveError, setFormSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [rateModalOpen, setRateModalOpen] = useState(false);
+  const [editingRateId, setEditingRateId] = useState(null);
+  const [rateForm, setRateForm] = useState(emptyRateForm);
+  const [rateFieldErrors, setRateFieldErrors] = useState({});
+  const [rateSaveError, setRateSaveError] = useState("");
+  const [confirmDeleteRate, setConfirmDeleteRate] = useState(null);
+  const [rateChooserOpen, setRateChooserOpen] = useState(false);
+  const [filterRegion, setFilterRegion] = useState("");
+  const [sectionFilters, setSectionFilters] = useState({ upcoming: true, open: true, closed: true, active: true, rate: true });
+  const [includeRateInputs, setIncludeRateInputs] = useState(false);
+  const [rateInputs, setRateInputs] = useState(emptyRateInputs);
+  const [rateInputErrors, setRateInputErrors] = useState({});
+  const [topUpModalOpen, setTopUpModalOpen] = useState(false);
+  const [topUpMode, setTopUpMode] = useState("existing");
+  const [topUpRequestId, setTopUpRequestId] = useState("");
+  const [topUpAmount, setTopUpAmount] = useState("");
+  const [topUpError, setTopUpError] = useState("");
+
+  // ---- auth (real Supabase Auth) / users / presence / activity ----
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [presence, setPresence] = useState({});
+  const [activity, setActivity] = useState([]);
+  const [authMode, setAuthMode] = useState("login");
+  const [authFirst, setAuthFirst] = useState("");
+  const [authLast, setAuthLast] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [updatePwError, setUpdatePwError] = useState("");
+  const [updatePwNotice, setUpdatePwNotice] = useState("");
+  const [updatePwBusy, setUpdatePwBusy] = useState(false);
+  const [manageUsersOpen, setManageUsersOpen] = useState(false);
+  const [activityLogOpen, setActivityLogOpen] = useState(false);
+  const [presenceTapped, setPresenceTapped] = useState(null);
+
+  const currentUserId = session ? session.user.id : null;
+  const currentUser = users.find(u => u.id === currentUserId) || null;
+  const role = currentUser ? currentUser.role : null;
+  const isSuperAdmin = role === "superadmin";
+  const isAdmin = role === "admin" || isSuperAdmin;
+  const isUser = !!currentUser; // any logged-in, registered person can view the dashboard
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const lastSyncedRef = useRef("");
+  const lastRateSyncedRef = useRef("");
+  const lastClientsSyncedRef = useRef("");
+  const lastUsersSyncedRef = useRef("");
+  const lastActivitySyncedRef = useRef("");
+  const lastPresenceSyncedRef = useRef("");
+  const loggedInOnceRef = useRef(false);
+
+  // establish and track the Supabase Auth session
+  useEffect(() => {
+    sb.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthReady(true);
+    });
+    const { data: sub } = sb.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (_event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // load app data once we have a session; clear it back out on logout
+  useEffect(() => {
+    if (!session) {
+      setLoaded(false);
+      loggedInOnceRef.current = false;
+      return;
+    }
+    (async () => {
+      try {
+        const remote = await kvGet(KV_REQUESTS);
+        if (remote) { setRequests(remote); lastSyncedRef.current = JSON.stringify(remote); }
+      } catch (e) { console.error("load requests failed", e); }
+      try {
+        const remoteRates = await kvGet(KV_RATE_CARD);
+        if (remoteRates) { setRateCard(remoteRates); lastRateSyncedRef.current = JSON.stringify(remoteRates); }
+      } catch (e) { console.error("load rate card failed", e); }
+      try {
+        const remoteClients = await kvGet(KV_CLIENTS);
+        if (remoteClients && remoteClients.length) {
+          setClientsList(remoteClients);
+          lastClientsSyncedRef.current = JSON.stringify(remoteClients);
+        }
+      } catch (e) { console.error("load clients failed", e); }
+      let mappedUsers = [];
+      try {
+        const { data, error } = await sb.from("profiles").select("*");
+        if (error) throw error;
+        mappedUsers = (data || []).map(mapProfile);
+        setUsers(mappedUsers);
+        lastUsersSyncedRef.current = JSON.stringify(mappedUsers);
+      } catch (e) { console.error("load users failed", e); }
+      try {
+        const remoteActivity = await kvGet(KV_ACTIVITY);
+        if (remoteActivity) { setActivity(remoteActivity); lastActivitySyncedRef.current = JSON.stringify(remoteActivity); }
+      } catch (e) { console.error("load activity failed", e); }
+      try {
+        const remotePresence = await kvGet(KV_PRESENCE);
+        if (remotePresence) { setPresence(remotePresence); lastPresenceSyncedRef.current = JSON.stringify(remotePresence); }
+      } catch (e) { console.error("load presence failed", e); }
+      setLoaded(true);
+      if (!loggedInOnceRef.current) {
+        loggedInOnceRef.current = true;
+        const me = mappedUsers.find(u => u.id === session.user.id);
+        if (me) logActivityFor(me, "login", `${fullName(me)} logged in`);
+      }
+    })();
+  }, [session]);
+
+  // save requests
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        await kvSet(KV_REQUESTS, requests);
+        lastSyncedRef.current = JSON.stringify(requests);
+      } catch (e) { console.error("save failed", e); }
+    })();
+  }, [requests, loaded]);
+
+  // save rate card
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        await kvSet(KV_RATE_CARD, rateCard);
+        lastRateSyncedRef.current = JSON.stringify(rateCard);
+      } catch (e) { console.error("save rate card failed", e); }
+    })();
+  }, [rateCard, loaded]);
+
+  // save clients list
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        await kvSet(KV_CLIENTS, clientsList);
+        lastClientsSyncedRef.current = JSON.stringify(clientsList);
+      } catch (e) { console.error("save clients failed", e); }
+    })();
+  }, [clientsList, loaded]);
+
+  // save activity (capped)
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        await kvSet(KV_ACTIVITY, activity);
+        lastActivitySyncedRef.current = JSON.stringify(activity);
+      } catch (e) { console.error("save activity failed", e); }
+    })();
+  }, [activity, loaded]);
+
+  // apply any token job-request deductions whose Request Date has fully passed onto the
+  // matching client+city Active Tokens account. Re-runs whenever requests/rateCard change
+  // (including from the poll below), so it catches things that mature while the app is open.
+  useEffect(() => {
+    if (!loaded || !isAdmin) return;
+    const result = sweepMaturedDeductions(requests, rateCard);
+    if (!result) return;
+    setRequests(result.requests);
+    result.applied.forEach(a => {
+      logActivity("deduction", `Deducted $${a.amount.toLocaleString()} from ${a.client} (${a.city}) for ${a.refNo}`);
+    });
+  }, [loaded, requests, rateCard, isAdmin]);
+
+  // presence heartbeat: announce ourselves and prune stale entries every ~15s
+  useEffect(() => {
+    if (!loaded || !currentUser) return;
+    const beat = async () => {
+      try {
+        const remote = (await kvGet(KV_PRESENCE)) || {};
+        const now = Date.now();
+        const fresh = {};
+        Object.keys(remote).forEach(id => {
+          if (now - new Date(remote[id].lastSeen).getTime() < PRESENCE_WINDOW_MS) fresh[id] = remote[id];
+        });
+        if (currentUser) {
+          fresh[currentUser.id] = {
+            firstName: currentUser.firstName,
+            lastName: currentUser.lastName,
+            role: currentUser.role,
+            lastSeen: new Date().toISOString()
+          };
+        }
+        await kvSet(KV_PRESENCE, fresh);
+        lastPresenceSyncedRef.current = JSON.stringify(fresh);
+        setPresence(fresh);
+      } catch (e) { console.error("presence heartbeat failed", e); }
+    };
+    beat();
+    const interval = setInterval(beat, 15000);
+    return () => clearInterval(interval);
+  }, [loaded, currentUserId, role]);
+
+  // poll for updates from other viewers every 10s
+  useEffect(() => {
+    if (!loaded) return;
+    const interval = setInterval(async () => {
+      try {
+        const remote = await kvGet(KV_REQUESTS);
+        const remoteJson = remote ? JSON.stringify(remote) : "";
+        if (remoteJson && remoteJson !== lastSyncedRef.current) {
+          lastSyncedRef.current = remoteJson;
+          setRequests(remote);
+        }
+      } catch (e) {}
+      try {
+        const remoteRates = await kvGet(KV_RATE_CARD);
+        const remoteRatesJson = remoteRates ? JSON.stringify(remoteRates) : "";
+        if (remoteRatesJson && remoteRatesJson !== lastRateSyncedRef.current) {
+          lastRateSyncedRef.current = remoteRatesJson;
+          setRateCard(remoteRates);
+        }
+      } catch (e) {}
+      try {
+        const remoteClients = await kvGet(KV_CLIENTS);
+        const remoteClientsJson = remoteClients ? JSON.stringify(remoteClients) : "";
+        if (remoteClientsJson && remoteClientsJson !== lastClientsSyncedRef.current) {
+          lastClientsSyncedRef.current = remoteClientsJson;
+          setClientsList(remoteClients);
+        }
+      } catch (e) {}
+      try {
+        const { data, error } = await sb.from("profiles").select("*");
+        if (error) throw error;
+        const mapped = (data || []).map(mapProfile);
+        const mappedJson = JSON.stringify(mapped);
+        if (mappedJson !== lastUsersSyncedRef.current) {
+          lastUsersSyncedRef.current = mappedJson;
+          setUsers(mapped);
+        }
+      } catch (e) {}
+      try {
+        const remoteActivity = await kvGet(KV_ACTIVITY);
+        const remoteActivityJson = remoteActivity ? JSON.stringify(remoteActivity) : "";
+        if (remoteActivityJson && remoteActivityJson !== lastActivitySyncedRef.current) {
+          lastActivitySyncedRef.current = remoteActivityJson;
+          setActivity(remoteActivity);
+        }
+      } catch (e) {}
+      try {
+        const remotePresence = await kvGet(KV_PRESENCE);
+        const remotePresenceJson = remotePresence ? JSON.stringify(remotePresence) : "";
+        if (remotePresenceJson && remotePresenceJson !== lastPresenceSyncedRef.current) {
+          lastPresenceSyncedRef.current = remotePresenceJson;
+          setPresence(remotePresence);
+        }
+      } catch (e) {}
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [loaded]);
+
+  const logActivity = (action, detail) => {
+    if (!currentUser) return;
+    setActivity(a => {
+      const entry = { id: uid(), ts: new Date().toISOString(), userId: currentUser.id, name: fullName(currentUser), role: currentUser.role, action, detail };
+      const next = [...a, entry];
+      return next.length > 300 ? next.slice(next.length - 300) : next;
+    });
+  };
+
+  // logActivity needs the *new* user before React state updates flow through,
+  // so the post-login path uses this variant with an explicit user object
+  const logActivityFor = (user, action, detail) => {
+    setActivity(a => {
+      const entry = { id: uid(), ts: new Date().toISOString(), userId: user.id, name: fullName(user), role: user.role, action, detail };
+      const next = [...a, entry];
+      return next.length > 300 ? next.slice(next.length - 300) : next;
+    });
+  };
+
+  const submitAuth = async () => {
+    setAuthError("");
+    setAuthNotice("");
+    if (!authEmail.trim() || !authPassword.trim()) { setAuthError("Enter your email and password."); return; }
+    setAuthBusy(true);
+    try {
+      if (authMode === "register") {
+        if (!authFirst.trim() || !authLast.trim()) { setAuthError("Please enter your first and last name."); return; }
+        if (authPassword.length < 6) { setAuthError("Choose a password of at least 6 characters."); return; }
+        const { error } = await sb.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+          options: { data: { first_name: authFirst.trim(), last_name: authLast.trim() } }
+        });
+        if (error) { setAuthError(error.message); return; }
+        setAuthNotice("Check your email to confirm your account, then log in.");
+        setAuthMode("login");
+        setAuthPassword("");
+      } else {
+        const { error } = await sb.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+        if (error) { setAuthError(error.message); return; }
+        setAuthPassword("");
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+  const submitForgotPassword = async () => {
+    setAuthError("");
+    setAuthNotice("");
+    if (!authEmail.trim()) { setAuthError("Enter your email."); return; }
+    setAuthBusy(true);
+    try {
+      const { error } = await sb.auth.resetPasswordForEmail(authEmail.trim(), {
+        redirectTo: window.location.href.split("#")[0].split("?")[0]
+      });
+      if (error) { setAuthError(error.message); return; }
+      setAuthNotice("If an account exists for that email, a password reset link has been sent.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+  const submitNewPassword = async () => {
+    setUpdatePwError("");
+    setUpdatePwNotice("");
+    if (newPassword.length < 6) { setUpdatePwError("Choose a password of at least 6 characters."); return; }
+    if (newPassword !== newPasswordConfirm) { setUpdatePwError("Passwords do not match."); return; }
+    setUpdatePwBusy(true);
+    try {
+      const { error } = await sb.auth.updateUser({ password: newPassword });
+      if (error) { setUpdatePwError(error.message); return; }
+      setNewPassword("");
+      setNewPasswordConfirm("");
+      setPasswordRecovery(false);
+    } finally {
+      setUpdatePwBusy(false);
+    }
+  };
+  const logout = async () => {
+    if (currentUser) logActivity("logout", `${fullName(currentUser)} logged out`);
+    try {
+      const remote = (await kvGet(KV_PRESENCE)) || {};
+      if (currentUserId) delete remote[currentUserId];
+      await kvSet(KV_PRESENCE, remote);
+      setPresence(remote);
+    } catch (e) {}
+    await sb.auth.signOut();
+  };
+  const setUserRole = async (userId, newRole) => {
+    if (!isSuperAdmin) return;
+    const target = users.find(u => u.id === userId);
+    try {
+      const { data, error } = await sb.rpc("set_user_role", { target_id: userId, new_role: newRole });
+      if (error || !data) return;
+      setUsers(us => us.map(u => u.id === userId ? { ...u, role: newRole } : u));
+      if (target) logActivity("role-change", `Set ${fullName(target)} to ${ROLE_LABEL[newRole]}`);
+    } catch (e) {}
+  };
+
+  const openAdd = () => {
+    if (!isAdmin) return;
+    setForm(emptyForm);
+    setEditingId(null);
+    setFieldErrors({});
+    setFormSaveError("");
+    setIncludeRateInputs(false);
+    setRateInputs(emptyRateInputs);
+    setRateInputErrors({});
+    setModalOpen(true);
+  };
+  const openEdit = r => {
+    if (!isAdmin) return;
+    setIncludeRateInputs(false);
+    setRateInputs(emptyRateInputs);
+    setRateInputErrors({});
+    setForm({
+      refNo: r.refNo,
+      client: r.client,
+      city: r.city || "",
+      address: r.address,
+      region: r.region || "",
+      scope: r.scope || "",
+      type: r.type,
+      tokenCount: String(r.tokenCount ?? ""),
+      requestDate: r.requestDate,
+      startTime: r.startTime || "",
+      endTime: r.endTime || ""
+    });
+    setEditingId(r.id);
+    setFieldErrors({});
+    setFormSaveError("");
+    setModalOpen(true);
+  };
+  const saveForm = async () => {
+    if (!isAdmin) return;
+    const errs = {};
+    if (!form.refNo.trim()) errs.refNo = "Please fill in reference no";
+    if (!form.client.trim()) errs.client = "Please fill in client";
+    if (form.type === "token" && !form.city.trim()) errs.city = "Please fill in city";
+    if (!form.address.trim()) errs.address = "Please fill in address";
+    if (!form.region.trim()) errs.region = "Please fill in region";
+    if (!form.requestDate) errs.requestDate = "Please fill in request date";
+    if (form.startTime && form.endTime && form.endTime <= form.startTime) errs.endTime = "End time must be after start time";
+    if (includeRateInputs) {
+      const n = parseInt(form.tokenCount, 10);
+      if (!Number.isFinite(n) || n < 1) errs.tokenCount = "Enter a starting amount of $1 or more";
+    }
+    const editingExisting = editingId ? requests.find(r => r.id === editingId) : null;
+    const editingAcct = editingExisting ? isTokenAccount(editingExisting) : false;
+    if (editingAcct && isSuperAdmin) {
+      const n = parseInt(form.tokenCount, 10);
+      if (!Number.isFinite(n) || n < 0) errs.tokenCount = "Enter a balance of $0 or more";
+    }
+    setFieldErrors(errs);
+
+    let rateErrs = {};
+    let ratePayload = null;
+    if (includeRateInputs) {
+      const parseRate = val => val.trim() === "" ? null : Number(val);
+      const bizH = parseRate(rateInputs.hourRateWeekdayBiz);
+      const afterH = parseRate(rateInputs.hourRateWeekdayAfter);
+      const weekendH = parseRate(rateInputs.hourRateWeekend);
+      if (rateInputs.hourRateWeekdayBiz.trim() !== "" && (!Number.isFinite(bizH) || bizH < 0)) rateErrs.hourRateWeekdayBiz = "Enter a valid rate";
+      if (rateInputs.hourRateWeekdayAfter.trim() !== "" && (!Number.isFinite(afterH) || afterH < 0)) rateErrs.hourRateWeekdayAfter = "Enter a valid rate";
+      if (rateInputs.hourRateWeekend.trim() !== "" && (!Number.isFinite(weekendH) || weekendH < 0)) rateErrs.hourRateWeekend = "Enter a valid rate";
+      setRateInputErrors(rateErrs);
+      if (bizH != null || afterH != null || weekendH != null) {
+        ratePayload = { hourRateWeekdayBiz: bizH, hourRateWeekdayAfter: afterH, hourRateWeekend: weekendH };
+      }
+    }
+
+    if (Object.keys(errs).length > 0 || Object.keys(rateErrs).length > 0) return;
+
+    let newRequests;
+    let balanceAdjustLog = null;
+    if (editingId) {
+      newRequests = requests.map(r => {
+        if (r.id !== editingId) return r;
+        const schedule = r.type !== form.type ? buildSlots(form, r.schedule || [], isTokenAccount(r)) : r.schedule;
+        // balance only ever changes via Top Up, a matured deduction sweep, or a direct Super
+        // Admin edit on an account here -- never a plain edit otherwise
+        let tokenCount = form.type !== "token" ? slotCountFor(form) : r.tokenCount;
+        if (form.type === "token" && isTokenAccount(r) && isSuperAdmin) {
+          const n = Math.max(0, parseInt(form.tokenCount, 10) || 0);
+          if (n !== (r.tokenCount || 0)) balanceAdjustLog = { client: r.client, city: r.city, refNo: r.refNo, from: r.tokenCount || 0, to: n };
+          tokenCount = n;
+        }
+        return { ...r, ...form, tokenCount, schedule };
+      });
+    } else {
+      const tokenCount = form.type !== "token" ? slotCountFor(form)
+        : includeRateInputs ? Math.max(0, parseInt(form.tokenCount, 10) || 0)
+        : 0; // a new job-request has no balance of its own -- deduction lands on the account later
+      // only the "new client" flow (Top Up Tokens -> new client) creates a token account;
+      // a normal Add Request (even Token type, for an existing client) is a job, not an account
+      newRequests = [...requests, { id: uid(), ...form, tokenCount, isAccount: includeRateInputs, deductionApplied: false, deductedAmount: null, schedule: buildSlots(form, [], includeRateInputs) }];
+    }
+
+    let newRateCard = rateCard;
+    if (ratePayload) {
+      const existing = findRate(rateCard, form.client, form.city);
+      newRateCard = existing
+        ? rateCard.map(r => r.id !== existing.id ? r : { ...r, ...ratePayload })
+        : [...rateCard, { id: uid(), client: form.client, region: form.region, city: form.city, ...ratePayload }];
+    }
+
+    let newClientsList = clientsList;
+    if (includeRateInputs && form.client.trim()) {
+      const clientName = form.client.trim();
+      newClientsList = clientsList.some(c => c.trim().toLowerCase() === clientName.toLowerCase()) ? clientsList : [...clientsList, clientName];
+    }
+
+    setFormSaveError("");
+    setSaving(true);
+    try {
+      await kvSet(KV_REQUESTS, newRequests);
+      if (newRateCard !== rateCard) await kvSet(KV_RATE_CARD, newRateCard);
+      if (newClientsList !== clientsList) await kvSet(KV_CLIENTS, newClientsList);
+
+      setRequests(newRequests);
+      lastSyncedRef.current = JSON.stringify(newRequests);
+      if (newRateCard !== rateCard) { setRateCard(newRateCard); lastRateSyncedRef.current = JSON.stringify(newRateCard); }
+      if (newClientsList !== clientsList) { setClientsList(newClientsList); lastClientsSyncedRef.current = JSON.stringify(newClientsList); }
+
+      const detail = includeRateInputs
+        ? `Created Active Tokens account for ${form.client} (${form.city}) with starting balance $${(newRequests[newRequests.length - 1].tokenCount || 0).toLocaleString()}`
+        : `${editingId ? "Edited" : "Added"} request ${form.refNo} for ${form.client}`;
+      logActivity(editingId ? "edit-request" : "add-request", detail);
+      if (balanceAdjustLog) {
+        logActivity("balance-adjust", `Adjusted balance for ${balanceAdjustLog.client} (${balanceAdjustLog.city}) — $${balanceAdjustLog.from.toLocaleString()} → $${balanceAdjustLog.to.toLocaleString()}`);
+      }
+      setModalOpen(false);
+    } catch (e) {
+      console.error("save request failed", e);
+      setFormSaveError("Could not save — check your connection and try again. Your entered data is still here.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const deleteRequest = async id => {
+    if (!isAdmin) return;
+    const target = requests.find(r => r.id === id);
+    const newRequests = requests.filter(r => r.id !== id);
+    setSaving(true);
+    try {
+      await kvSet(KV_REQUESTS, newRequests);
+      setRequests(newRequests);
+      lastSyncedRef.current = JSON.stringify(newRequests);
+      setConfirmDelete(null);
+      if (target) logActivity("delete-request", `Deleted request ${target.refNo} for ${target.client}`);
+    } catch (e) {
+      console.error("delete request failed", e);
+      alert("Could not delete — check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openEditRate = rate => {
+    if (!isAdmin) return;
+    setRateForm({
+      client: rate.client,
+      region: rate.region || "",
+      city: rate.city || "",
+      hourRateWeekdayBiz: String(rate.hourRateWeekdayBiz ?? ""),
+      hourRateWeekdayAfter: String(rate.hourRateWeekdayAfter ?? ""),
+      hourRateWeekend: String(rate.hourRateWeekend ?? "")
+    });
+    setEditingRateId(rate.id);
+    setRateFieldErrors({});
+    setRateSaveError("");
+    setRateModalOpen(true);
+  };
+  const openAddRate = () => {
+    if (!isAdmin) return;
+    setRateForm(emptyRateForm);
+    setEditingRateId(null);
+    setRateFieldErrors({});
+    setRateSaveError("");
+    setRateModalOpen(true);
+  };
+  const saveRateForm = async () => {
+    if (!isAdmin) return;
+    const errs = {};
+    if (!rateForm.client.trim()) errs.client = "Please fill in client";
+    if (!rateForm.region.trim()) errs.region = "Please fill in region";
+    if (!rateForm.city.trim()) errs.city = "Please fill in city";
+    const dupe = rateCard.some(r =>
+      r.id !== editingRateId &&
+      r.client.trim().toLowerCase() === rateForm.client.trim().toLowerCase() &&
+      (r.city || "").trim().toLowerCase() === rateForm.city.trim().toLowerCase()
+    );
+    if (dupe) errs.city = "A rate for this client + city already exists";
+    const parseRate = val => val.trim() === "" ? null : Number(val);
+    const bizH = parseRate(rateForm.hourRateWeekdayBiz);
+    const afterH = parseRate(rateForm.hourRateWeekdayAfter);
+    const weekendH = parseRate(rateForm.hourRateWeekend);
+    if (rateForm.hourRateWeekdayBiz.trim() !== "" && (!Number.isFinite(bizH) || bizH < 0)) errs.hourRateWeekdayBiz = "Enter a valid rate";
+    if (rateForm.hourRateWeekdayAfter.trim() !== "" && (!Number.isFinite(afterH) || afterH < 0)) errs.hourRateWeekdayAfter = "Enter a valid rate";
+    if (rateForm.hourRateWeekend.trim() !== "" && (!Number.isFinite(weekendH) || weekendH < 0)) errs.hourRateWeekend = "Enter a valid rate";
+    if (bizH === null && afterH === null && weekendH === null) {
+      errs.hourRateWeekdayBiz = "Enter at least one rate";
+    }
+    setRateFieldErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+
+    const payload = {
+      client: rateForm.client, region: rateForm.region, city: rateForm.city,
+      hourRateWeekdayBiz: bizH, hourRateWeekdayAfter: afterH, hourRateWeekend: weekendH
+    };
+    const newRateCard = editingRateId
+      ? rateCard.map(r => r.id !== editingRateId ? r : { ...r, ...payload })
+      : [...rateCard, { id: uid(), ...payload }];
+
+    setRateSaveError("");
+    setSaving(true);
+    try {
+      await kvSet(KV_RATE_CARD, newRateCard);
+      setRateCard(newRateCard);
+      lastRateSyncedRef.current = JSON.stringify(newRateCard);
+      logActivity("edit-rate", `Set rate card for ${rateForm.client} (${rateForm.city})`);
+      setRateModalOpen(false);
+    } catch (e) {
+      console.error("save rate failed", e);
+      setRateSaveError("Could not save — check your connection and try again. Your entered data is still here.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const deleteRate = async id => {
+    if (!isAdmin) return;
+    const target = rateCard.find(r => r.id === id);
+    const newRateCard = rateCard.filter(r => r.id !== id);
+    setSaving(true);
+    try {
+      await kvSet(KV_RATE_CARD, newRateCard);
+      setRateCard(newRateCard);
+      lastRateSyncedRef.current = JSON.stringify(newRateCard);
+      setConfirmDeleteRate(null);
+      if (target) logActivity("delete-rate", `Removed rate card for ${target.client}`);
+    } catch (e) {
+      console.error("delete rate failed", e);
+      alert("Could not delete — check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openTopUp = () => {
+    if (!isAdmin) return;
+    setTopUpMode("existing");
+    setTopUpRequestId("");
+    setTopUpAmount("");
+    setTopUpError("");
+    setTopUpModalOpen(true);
+  };
+  const goToNewClientTopUp = () => {
+    if (!isAdmin) return;
+    setTopUpModalOpen(false);
+    setForm({ ...emptyForm, type: "token" });
+    setEditingId(null);
+    setFieldErrors({});
+    setFormSaveError("");
+    setIncludeRateInputs(true);
+    setRateInputs(emptyRateInputs);
+    setRateInputErrors({});
+    setModalOpen(true);
+  };
+  const submitTopUp = async () => {
+    if (!isAdmin) return;
+    if (!topUpRequestId) { setTopUpError("Please select a client / request to top up."); return; }
+    const amount = parseInt(topUpAmount, 10);
+    if (!Number.isFinite(amount) || amount < 1) { setTopUpError("Enter a top-up amount of 1 or more."); return; }
+    const target = requests.find(r => r.id === topUpRequestId);
+    const prevBalance = target ? (target.tokenCount || 0) : 0;
+    const newRequests = requests.map(r => r.id !== topUpRequestId ? r : { ...r, tokenCount: (r.tokenCount || 0) + amount });
+
+    setTopUpError("");
+    setSaving(true);
+    try {
+      await kvSet(KV_REQUESTS, newRequests);
+      setRequests(newRequests);
+      lastSyncedRef.current = JSON.stringify(newRequests);
+      if (target) logActivity("top-up", `Topped up $${amount.toLocaleString()} for ${target.client} (${target.refNo}) — balance $${prevBalance.toLocaleString()} → $${(prevBalance + amount).toLocaleString()}`);
+      setTopUpModalOpen(false);
+    } catch (e) {
+      console.error("top up failed", e);
+      setTopUpError("Could not save — check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const enriched = useMemo(() => requests.map(r => {
+    const schedule = (r.schedule || []).map(s => ({ ...s, status: slotStatus(s) }));
+    const pending = schedule.filter(s => !s.completed);
+    const nextTwo = pending.slice(0, 2);
+    const overdueCount = schedule.filter(s => s.status === "overdue").length;
+    const dueSoonCount = schedule.filter(s => s.status === "due-soon").length;
+    const completedCount = schedule.filter(s => s.completed).length;
+    // token requests are a running balance with no "done" state, so they always count as open
+    const remaining = r.type === "token" ? 1 : schedule.length - completedCount;
+    const rate = r.type === "token" ? findRate(rateCard, r.client, r.city) : null;
+    const hourTier = r.type === "token" ? deriveHourTier(r.requestDate, r.startTime) : null;
+    const durationHours = r.type === "token" ? hoursBetween(r.startTime, r.endTime) : null;
+    let unitRate = null;
+    if (rate && hourTier) {
+      const tier = HOUR_TIERS.find(t => t.value === hourTier) || HOUR_TIERS[0];
+      unitRate = rate[tier.rateField];
+    }
+    const estCost = (unitRate != null && durationHours != null) ? unitRate * durationHours : null;
+    return { ...r, schedule, nextTwo, overdueCount, dueSoonCount, completedCount, remaining, hourTier, durationHours, unitRate, estCost };
+  }), [requests, rateCard]);
+
+  const upcomingFeed = useMemo(() => {
+    const items = [];
+    enriched.forEach(r => {
+      r.nextTwo.forEach(s => {
+        if (s.date) items.push({
+          requestId: r.id, slotId: s.id, refNo: r.refNo, client: r.client,
+          address: r.address, region: r.region, date: s.date, status: s.status
+        });
+      });
+    });
+    return items.filter(item => !filterRegion || (item.region || "").toLowerCase() === filterRegion.toLowerCase())
+      .sort((a, b) => a.date < b.date ? -1 : 1).slice(0, 2);
+  }, [enriched, filterRegion]);
+
+  const isJobRequest = r => (r.type === "adhoc" && r.remaining > 0) || (r.type === "token" && !isTokenAccount(r));
+  const isPastDue = r => r.requestDate < todayStr();
+  const matchesRegion = r => !filterRegion || (r.region || "").toLowerCase() === filterRegion.toLowerCase();
+
+  const allRegionsList = useMemo(() => {
+    const set = new Set();
+    requests.forEach(r => { if (r.region) set.add(r.region); });
+    rateCard.forEach(r => { if (r.region) set.add(r.region); });
+    return [...set].sort();
+  }, [requests, rateCard]);
+
+  const filteredRateCard = useMemo(() =>
+    filterRegion ? rateCard.filter(r => (r.region || "").toLowerCase() === filterRegion.toLowerCase()) : rateCard,
+  [rateCard, filterRegion]);
+
+  const openRequests = useMemo(() =>
+    enriched.filter(r => isJobRequest(r) && !isPastDue(r) && matchesRegion(r))
+      .sort((a, b) => a.requestDate < b.requestDate ? 1 : a.requestDate > b.requestDate ? -1 : 0),
+  [enriched, filterRegion]);
+  const closedRequests = useMemo(() =>
+    enriched.filter(r => isJobRequest(r) && isPastDue(r) && matchesRegion(r))
+      .sort((a, b) => a.requestDate < b.requestDate ? 1 : a.requestDate > b.requestDate ? -1 : 0),
+  [enriched, filterRegion]);
+  const activeTokenRequests = useMemo(() =>
+    enriched.filter(r => isTokenAccount(r) && matchesRegion(r)).sort((a, b) => a.requestDate < b.requestDate ? 1 : a.requestDate > b.requestDate ? -1 : 0),
+  [enriched, filterRegion]);
+
+  const stats = useMemo(() => {
+    const open = enriched.filter(r => isJobRequest(r) && !isPastDue(r) && matchesRegion(r)).length;
+    const activeTokens = enriched.filter(r => isTokenAccount(r) && matchesRegion(r)).length;
+    return { open, activeTokens };
+  }, [enriched, filterRegion]);
+
+  const onlineUsers = useMemo(() => {
+    const now = Date.now();
+    return Object.entries(presence)
+      .filter(([id, p]) => now - new Date(p.lastSeen).getTime() < PRESENCE_WINDOW_MS)
+      .map(([id, p]) => ({ id, ...p }))
+      .sort((a, b) => fullName(a).localeCompare(fullName(b)));
+  }, [presence]);
+
+  const exportRequestsCsv = () => {
+    if (!isAdmin) return;
+    const header = ["Reference No", "Client", "City", "Address", "Region", "Type", "Rate Tier", "Balance ($)", "Deducted ($)", "Rate ($)", "Est. Cost ($)", "Request Date", "Start Time", "End Time", "Description"];
+    const rows = enriched.map(r => {
+      const isTok = r.type === "token";
+      const isAcct = isTokenAccount(r);
+      const tokenUnitLabel = isTok && r.hourTier
+        ? (HOUR_TIERS.find(t => t.value === r.hourTier) || HOUR_TIERS[0]).label
+        : "";
+      return [
+        r.refNo, r.client, r.city || "", r.address, r.region || "",
+        isTok ? (isAcct ? "Token Account" : "Token Job") : "Adhoc",
+        tokenUnitLabel,
+        isAcct ? r.tokenCount : "",
+        isTok && !isAcct && r.deductionApplied ? r.deductedAmount : "",
+        isTok && r.unitRate != null ? r.unitRate : "",
+        isTok && r.estCost != null ? r.estCost : "",
+        r.requestDate,
+        r.startTime || "",
+        r.endTime || "",
+        r.scope || ""
+      ];
+    });
+    downloadCsv(`adhoc-token-requests-${todayStr()}.csv`, [header, ...rows]);
+    logActivity("export-csv", `Exported ${rows.length} request${rows.length === 1 ? "" : "s"} to CSV`);
+  };
+
+  if (!authReady) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#0B0E0C", display: "flex", alignItems: "center", justifyContent: "center", color: "#8B948E", fontFamily: "'Space Grotesk', sans-serif" }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (passwordRecovery) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#0B0E0C", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, color: "#E8ECE9", fontFamily: "'Space Grotesk', sans-serif" }}>
+        <div style={{ width: "100%", maxWidth: 420, background: "#0E1210", border: "1px solid #1E2320", borderRadius: 14, padding: 28 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Set a new password</h1>
+          <div className="mono" style={{ fontSize: 10.5, letterSpacing: 1.5, color: "#8B948E", marginBottom: 22 }}>ADHOC / TOKEN SYSTEM</div>
+          <div style={{ display: "grid", gap: 12 }}>
+            <Field label="New password">
+              <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && submitNewPassword()} placeholder="Min 6 characters" style={inputStyle} />
+            </Field>
+            <Field label="Confirm new password">
+              <input type="password" value={newPasswordConfirm} onChange={e => setNewPasswordConfirm(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && submitNewPassword()} style={inputStyle} />
+            </Field>
+            {updatePwError && <div style={{ color: "#F2545B", fontSize: 12 }}>{updatePwError}</div>}
+            {updatePwNotice && <div style={{ color: "#4ADE9C", fontSize: 12 }}>{updatePwNotice}</div>}
+            <button onClick={submitNewPassword} disabled={updatePwBusy}
+              style={{ background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14, opacity: updatePwBusy ? 0.6 : 1 }}>
+              {updatePwBusy ? "Please wait…" : "Update Password"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#0B0E0C", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, color: "#E8ECE9", fontFamily: "'Space Grotesk', sans-serif" }}>
+        <div style={{ width: "100%", maxWidth: 420, background: "#0E1210", border: "1px solid #1E2320", borderRadius: 14, padding: 28 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Adhoc / Token System</h1>
+          <div className="mono" style={{ fontSize: 10.5, letterSpacing: 1.5, color: "#8B948E", marginBottom: 22 }}>GLOBAL VISION MULTIMEDIA · A RICOH COMPANY</div>
+
+          {authMode !== "forgot" && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
+              {[["login", "Log In"], ["register", "Register"]].map(([tab, label]) => (
+                <button key={tab} type="button" className="type-btn" onClick={() => { setAuthMode(tab); setAuthError(""); setAuthNotice(""); }}
+                  style={{
+                    flex: 1, padding: "10px 4px", borderRadius: 7, fontWeight: 600, fontSize: 12.5,
+                    border: authMode === tab ? "1px solid #4ADE9C" : "1px solid #262B27",
+                    background: authMode === tab ? "#4ADE9C22" : "transparent",
+                    color: authMode === tab ? "#4ADE9C" : "#8B948E"
+                  }}>{label}</button>
+              ))}
+            </div>
+          )}
+
+          {authMode === "forgot" ? (
+            <div style={{ display: "grid", gap: 12 }}>
+              <div className="mono" style={{ fontSize: 10.5, color: "#8B948E", marginTop: -8 }}>
+                Enter your account email and we'll send you a password reset link.
+              </div>
+              <Field label="Email">
+                <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && submitForgotPassword()} placeholder="you@example.com" style={inputStyle} />
+              </Field>
+              {authError && <div style={{ color: "#F2545B", fontSize: 12 }}>{authError}</div>}
+              {authNotice && <div style={{ color: "#4ADE9C", fontSize: 12 }}>{authNotice}</div>}
+              <button onClick={submitForgotPassword} disabled={authBusy}
+                style={{ background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14, opacity: authBusy ? 0.6 : 1 }}>
+                {authBusy ? "Please wait…" : "Send Reset Link"}
+              </button>
+              <button type="button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthNotice(""); }}
+                style={{ background: "none", border: "none", color: "#8B948E", fontSize: 12.5, cursor: "pointer", padding: 0, textAlign: "left" }}>
+                ← Back to log in
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 12 }}>
+              {authMode === "register" && (
+                <React.Fragment>
+                  <Field label="First name"><TextInput value={authFirst} onChange={setAuthFirst} placeholder="JANE" uppercase /></Field>
+                  <Field label="Last name"><TextInput value={authLast} onChange={setAuthLast} placeholder="DOE" uppercase /></Field>
+                </React.Fragment>
+              )}
+              <Field label="Email">
+                <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && submitAuth()} placeholder="you@example.com" style={inputStyle} />
+              </Field>
+              <Field label={authMode === "register" ? "Choose a password" : "Password"}>
+                <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && submitAuth()}
+                  placeholder={authMode === "register" ? "Min 6 characters" : ""} style={inputStyle} />
+              </Field>
+              {authMode === "login" && (
+                <button type="button" onClick={() => { setAuthMode("forgot"); setAuthError(""); setAuthNotice(""); }}
+                  style={{ background: "none", border: "none", color: "#6E9FB0", fontSize: 12.5, cursor: "pointer", padding: 0, textAlign: "left", marginTop: -6 }}>
+                  Forgot password?
+                </button>
+              )}
+              {authMode === "register" && (
+                <div className="mono" style={{ fontSize: 10.5, color: "#8B948E" }}>
+                  New accounts start as Guest (view only) until an Admin promotes you.
+                </div>
+              )}
+              {authError && <div style={{ color: "#F2545B", fontSize: 12 }}>{authError}</div>}
+              {authNotice && <div style={{ color: "#4ADE9C", fontSize: 12 }}>{authNotice}</div>}
+              <button onClick={submitAuth} disabled={authBusy}
+                style={{ background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14, opacity: authBusy ? 0.6 : 1 }}>
+                {authBusy ? "Please wait…" : authMode === "register" ? "Register" : "Log In"}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0B0E0C", fontFamily: "'Space Grotesk', sans-serif", color: "#E8ECE9" }}>
+      <div style={{ borderBottom: "1px solid #1E2320", padding: "28px 32px 24px" }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+            <div>
+              <h1 style={{ fontSize: 30, fontWeight: 500, margin: 0, letterSpacing: -0.5 }}>Adhoc / Token System</h1>
+              <div className="mono" style={{ fontSize: 11, letterSpacing: 2, color: "#8B948E", marginTop: 5 }}>GLOBAL VISION MULTIMEDIA · A RICOH COMPANY</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center" }}>
+                {onlineUsers.map((u, i) => (
+                  <div key={u.id} onClick={() => setPresenceTapped(t => t === u.id ? null : u.id)}
+                    title={`${u.firstName} ${u.lastName} · ${ROLE_LABEL[u.role]}`}
+                    style={{
+                      width: 28, height: 28, borderRadius: "50%", marginLeft: i === 0 ? 0 : -8,
+                      background: "#0E1210", border: `2px solid ${ROLE_COLOR[u.role] || "#8B948E"}`,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 10.5, fontWeight: 700, color: ROLE_COLOR[u.role] || "#8B948E", cursor: "pointer",
+                      position: "relative", zIndex: onlineUsers.length - i
+                    }}>{initials(u.firstName, u.lastName)}</div>
+                ))}
+              </div>
+              {presenceTapped && onlineUsers.find(u => u.id === presenceTapped) && (
+                <span className="mono" style={{ fontSize: 11, color: "#8B948E" }}>
+                  {fullName(onlineUsers.find(u => u.id === presenceTapped))} · {ROLE_LABEL[onlineUsers.find(u => u.id === presenceTapped).role]}
+                </span>
+              )}
+              <div className="mono" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#8B948E" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <Shield size={12} color={ROLE_COLOR[role]} />
+                  {fullName(currentUser)} · {ROLE_LABEL[role]}
+                </span>
+                <button onClick={logout} style={{ background: "none", border: "1px solid #262B27", borderRadius: 6, padding: "5px 9px", color: "#8B948E", fontSize: 11 }}>Log out</button>
+              </div>
+              {isSuperAdmin && (
+                <React.Fragment>
+                  <button onClick={() => setManageUsersOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", color: "#E8ECE9", border: "1px solid #262B27", borderRadius: 8, padding: "12px 18px", fontWeight: 600, fontSize: 14 }}>
+                    <UsersIcon size={16} /> Manage Users
+                  </button>
+                  <button onClick={() => setActivityLogOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", color: "#E8ECE9", border: "1px solid #262B27", borderRadius: 8, padding: "12px 18px", fontWeight: 600, fontSize: 14 }}>
+                    <ListIcon size={16} /> Activity Log
+                  </button>
+                </React.Fragment>
+              )}
+              {isAdmin && (
+                <React.Fragment>
+                  <button onClick={() => setRateChooserOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", color: "#4ADE9C", border: "1px solid #4ADE9C55", borderRadius: 8, padding: "12px 18px", fontWeight: 600, fontSize: 14 }}>
+                    <Pencil size={16} /> Edit Rate Card
+                  </button>
+                  <button onClick={openTopUp} style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", color: "#6E9FB0", border: "1px solid #6E9FB055", borderRadius: 8, padding: "12px 18px", fontWeight: 600, fontSize: 14 }}>
+                    <Ticket size={16} /> Top Up Tokens
+                  </button>
+                  <button onClick={openAdd} style={{ display: "flex", alignItems: "center", gap: 8, background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "12px 18px", fontWeight: 600, fontSize: 14 }}>
+                    <Plus size={16} /> Add Request
+                  </button>
+                  <button onClick={exportRequestsCsv} style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", color: "#E8ECE9", border: "1px solid #262B27", borderRadius: 8, padding: "12px 18px", fontWeight: 600, fontSize: 14 }}>
+                    <Download size={16} /> Export CSV
+                  </button>
+                </React.Fragment>
+              )}
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: 24 }}>
+            <StatBox label="OPEN REQUESTS" value={stats.open} color="#E8ECE9" />
+            <StatBox label="ACTIVE TOKEN" value={stats.activeTokens} color="#4ADE9C" />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 1180, margin: "0 auto", padding: "32px" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 28 }}>
+          <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
+            className="mono"
+            style={{ ...selectStyle, width: "auto", textTransform: "uppercase", fontSize: 12, fontWeight: 600, padding: "10px 14px", letterSpacing: 0.3 }}>
+            <option value="">REGION: ALL</option>
+            {allRegionsList.map(r => <option key={r} value={r}>{r.toUpperCase()}</option>)}
+          </select>
+          {[
+            ["upcoming", "UPCOMING VISIT"],
+            ["open", "OPEN REQUEST"],
+            ["closed", "CLOSED REQUEST"],
+            ["active", "ACTIVE TOKENS"],
+            ["rate", "RATE CARD"]
+          ].map(([key, label]) => (
+            <button key={key} type="button" onClick={() => setSectionFilters(f => ({ ...f, [key]: !f[key] }))}
+              className="mono"
+              style={{
+                padding: "10px 14px", borderRadius: 8, fontWeight: 600, fontSize: 12, letterSpacing: 0.3,
+                border: sectionFilters[key] ? "1px solid #4ADE9C" : "1px solid #262B27",
+                background: sectionFilters[key] ? "#4ADE9C22" : "transparent",
+                color: sectionFilters[key] ? "#4ADE9C" : "#8B948E"
+              }}>{label}</button>
+          ))}
+        </div>
+
+        {isUser && sectionFilters.upcoming && (
+          <section style={{ marginBottom: 40 }}>
+            <SectionHeader title="Upcoming Visits" sub="Next scheduled, across all requests" />
+            {upcomingFeed.length === 0 ? (
+              <EmptyRow text={requests.length === 0 ? "Add a request to start tracking visits." : "Select dates on your requests to see them here."} />
+            ) : (
+              <div style={{ border: "1px solid #1E2320", borderRadius: 10, overflow: "hidden" }}>
+                {upcomingFeed.map((item, i) => {
+                  const isNext = i === 0;
+                  return (
+                    <div key={item.requestId + item.slotId} style={{ padding: isNext ? "20px 20px" : "13px 16px", background: i % 2 === 0 ? "#0E1210" : "#0B0E0C", borderBottom: i === upcomingFeed.length - 1 ? "none" : "1px solid #1E2320" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: isNext ? 12 : 10 }}>
+                        <div className={`jack jack-glow${isNext ? " jack-pulse" : ""}`} style={{ background: STATUS_COLOR[item.status], color: STATUS_COLOR[item.status], width: isNext ? 14 : 10, height: isNext ? 14 : 10 }} />
+                        <span className="mono" style={{ fontSize: isNext ? 16 : 13, color: isNext ? "#E8ECE9" : "#8B948E" }}>{fmtShort(item.date)}</span>
+                        <span className="mono" style={{ fontSize: isNext ? 11 : 10, letterSpacing: 0.5, color: "#6E9FB0", border: "1px solid #6E9FB055", borderRadius: 5, padding: isNext ? "4px 10px" : "3px 8px" }}>UPCOMING</span>
+                      </div>
+                      <div style={{ fontSize: isNext ? 20 : 14, fontWeight: 700, marginTop: isNext ? 12 : 8, wordBreak: "break-word" }}>{item.client || "Untitled client"}</div>
+                      <div className="mono" style={{ fontSize: isNext ? 13 : 11, color: "#8B948E", marginTop: 3 }}>{item.refNo}</div>
+                      <div style={{ fontSize: isNext ? 14 : 12, color: "#8B948E", marginTop: 3, wordBreak: "break-word" }}>
+                        {item.address || "No address specified"}
+                        {item.city && <span className="mono" style={{ color: "#4ADE9C" }}> · {item.city.toUpperCase()}</span>}
+                        {item.region && <span className="mono" style={{ color: "#6E9FB0" }}> · {item.region.toUpperCase()}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {sectionFilters.open && (
+        <section>
+          <SectionHeader title="Open Requests" sub={`${openRequests.length} on file`} />
+          {openRequests.length === 0 ? (
+            <EmptyRow text={requests.length === 0 ? "No adhoc/token requests yet." : "No open requests."} />
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+              {openRequests.map(r => (
+                <RequestCard key={r.id} r={r} isAdmin={isAdmin}
+                  onEdit={() => openEdit(r)} onDelete={() => setConfirmDelete(r.id)} />
+              ))}
+            </div>
+          )}
+        </section>
+        )}
+
+        {sectionFilters.closed && (
+        <section style={{ marginTop: 40 }}>
+          <SectionHeader title="Closed Requests" sub={`${closedRequests.length} on file`} />
+          {closedRequests.length === 0 ? (
+            <EmptyRow text="No closed requests." />
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+              {closedRequests.map(r => (
+                <RequestCard key={r.id} r={r} isAdmin={isAdmin}
+                  onEdit={() => openEdit(r)} onDelete={() => setConfirmDelete(r.id)} />
+              ))}
+            </div>
+          )}
+        </section>
+        )}
+
+        {sectionFilters.active && (
+        <section style={{ marginTop: 40 }}>
+          <SectionHeader title="Active Tokens" sub={`${activeTokenRequests.length} on file`} />
+          {activeTokenRequests.length === 0 ? (
+            <EmptyRow text="No active token requests." />
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+              {activeTokenRequests.map(r => (
+                <RequestCard key={r.id} r={r} isAdmin={isAdmin}
+                  onEdit={() => openEdit(r)} onDelete={() => setConfirmDelete(r.id)} />
+              ))}
+            </div>
+          )}
+        </section>
+        )}
+
+        {sectionFilters.rate && (
+        <section style={{ marginTop: 40 }}>
+          {(() => {
+            const clientCount = new Set(filteredRateCard.map(r => r.client)).size;
+            return (
+              <SectionHeader title="Rate Card" sub={`${clientCount} client${clientCount === 1 ? "" : "s"} · ${filteredRateCard.length} cit${filteredRateCard.length === 1 ? "y" : "ies"} on file`} />
+            );
+          })()}
+          <div className="mono" style={{ fontSize: 11, color: "#8B948E", marginBottom: 14 }}>
+            Rates are matched by client + city and feed the estimated cost on token requests. Use Edit Rate Card → Add Rate to add another city for an existing client, or Top Up Tokens → New Client to onboard a brand new client.
+          </div>
+          {filteredRateCard.length === 0 ? (
+            <EmptyRow text="No rates on file yet." />
+          ) : (
+            <div style={{ display: "grid", gap: 16 }}>
+              {Object.entries(filteredRateCard.reduce((acc, r) => { (acc[r.client] = acc[r.client] || []).push(r); return acc; }, {})).map(([client, rates]) => (
+                <div key={client} style={{ border: "1px solid #1E2320", borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ padding: "10px 16px", background: "#12181580", fontWeight: 700, fontSize: 14 }}>{client}</div>
+                  {rates.map((rate, i) => (
+                    <div key={rate.id} style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "14px 16px", background: i % 2 === 0 ? "#0E1210" : "#0B0E0C", borderTop: "1px solid #1E2320", flexWrap: "wrap" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>
+                          {rate.city}
+                          {rate.region && <span className="mono" style={{ color: "#6E9FB0", fontWeight: 400, fontSize: 11 }}> · {rate.region.toUpperCase()}</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 18, fontSize: 12, flexWrap: "wrap" }}>
+                        <div>
+                          <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>WEEKDAY BIZ HRS</div>
+                          <div className="mono">{rate.hourRateWeekdayBiz != null ? rate.hourRateWeekdayBiz.toLocaleString() : "—"}</div>
+                        </div>
+                        <div>
+                          <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>WEEKDAY AFTER HRS</div>
+                          <div className="mono">{rate.hourRateWeekdayAfter != null ? rate.hourRateWeekdayAfter.toLocaleString() : "—"}</div>
+                        </div>
+                        <div>
+                          <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>WEEKEND</div>
+                          <div className="mono">{rate.hourRateWeekend != null ? rate.hourRateWeekend.toLocaleString() : "—"}</div>
+                        </div>
+                      </div>
+                      {isAdmin && (
+                        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                          <IconBtn onClick={() => openEditRate(rate)}><Pencil size={13} /></IconBtn>
+                          <IconBtn onClick={() => setConfirmDeleteRate(rate.id)}><Trash2 size={13} /></IconBtn>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+        )}
+      </div>
+
+      {rateModalOpen && (
+        <Modal onClose={() => setRateModalOpen(false)} narrow>
+          <h2 style={{ margin: "0 0 18px", fontSize: 18, fontWeight: 700 }}>{editingRateId ? "Edit Rate" : "Add Rate"}</h2>
+          <div style={{ display: "grid", gap: 14 }}>
+            <Field label="Client" error={rateFieldErrors.client}>
+              <select value={rateForm.client} onChange={e => setRateForm({ ...rateForm, client: e.target.value })}
+                disabled={!!editingRateId}
+                style={rateFieldErrors.client ? { ...selectStyle, border: "1px solid #F2545B", opacity: editingRateId ? 0.6 : 1 } : { ...selectStyle, opacity: editingRateId ? 0.6 : 1 }}>
+                <option value="">Please select client</option>
+                {clientsList.map(client => <option key={client} value={client}>{client}</option>)}
+              </select>
+            </Field>
+            <Field label="Region" error={rateFieldErrors.region}>
+              <select value={rateForm.region} onChange={e => setRateForm({ ...rateForm, region: e.target.value })}
+                style={rateFieldErrors.region ? { ...selectStyle, border: "1px solid #F2545B", textTransform: "uppercase" } : { ...selectStyle, textTransform: "uppercase" }}>
+                <option value="">Select a country</option>
+                {COUNTRIES.map(country => <option key={country} value={country}>{country}</option>)}
+              </select>
+            </Field>
+            <Field label="City" error={rateFieldErrors.city}>
+              <TextInput value={rateForm.city} onChange={v => setRateForm({ ...rateForm, city: v })} placeholder="E.G. TOKYO" uppercase error={!!rateFieldErrors.city} />
+            </Field>
+            <Field label="Amount ($) per hour · Weekday Business Hours" error={rateFieldErrors.hourRateWeekdayBiz}>
+              <input type="number" min="0" step="0.01" value={rateForm.hourRateWeekdayBiz}
+                onChange={e => setRateForm({ ...rateForm, hourRateWeekdayBiz: e.target.value })}
+                style={rateFieldErrors.hourRateWeekdayBiz ? { ...inputStyle, border: "1px solid #F2545B" } : inputStyle} />
+            </Field>
+            <Field label="Amount ($) per hour · Weekday After Office Hours" error={rateFieldErrors.hourRateWeekdayAfter}>
+              <input type="number" min="0" step="0.01" value={rateForm.hourRateWeekdayAfter}
+                onChange={e => setRateForm({ ...rateForm, hourRateWeekdayAfter: e.target.value })}
+                style={rateFieldErrors.hourRateWeekdayAfter ? { ...inputStyle, border: "1px solid #F2545B" } : inputStyle} />
+            </Field>
+            <Field label="Amount ($) per hour · Weekend" error={rateFieldErrors.hourRateWeekend}>
+              <input type="number" min="0" step="0.01" value={rateForm.hourRateWeekend}
+                onChange={e => setRateForm({ ...rateForm, hourRateWeekend: e.target.value })}
+                style={rateFieldErrors.hourRateWeekend ? { ...inputStyle, border: "1px solid #F2545B" } : inputStyle} />
+            </Field>
+            {rateSaveError && <div style={{ color: "#F2545B", fontSize: 12.5 }}>{rateSaveError}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
+            <button onClick={saveRateForm} disabled={saving} style={{ flex: 1, background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14, opacity: saving ? 0.6 : 1 }}>
+              {saving ? "Saving…" : editingRateId ? "Save changes" : "Add rate"}
+            </button>
+            <button onClick={() => setRateModalOpen(false)} disabled={saving} style={{ background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 8, padding: "11px 18px", fontSize: 14 }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {confirmDeleteRate && (
+        <Modal onClose={() => setConfirmDeleteRate(null)} narrow>
+          <h2 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 700 }}>Delete this rate?</h2>
+          <p style={{ color: "#8B948E", fontSize: 13, margin: "0 0 20px" }}>This removes the client's rate card entry. This can't be undone.</p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button onClick={() => deleteRate(confirmDeleteRate)} disabled={saving} style={{ flex: 1, background: "#F2545B", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14, opacity: saving ? 0.6 : 1 }}>
+              {saving ? "Deleting…" : "Delete"}
+            </button>
+            <button onClick={() => setConfirmDeleteRate(null)} disabled={saving} style={{ background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 8, padding: "11px 18px", fontSize: 14 }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {manageUsersOpen && (
+        <Modal onClose={() => setManageUsersOpen(false)}>
+          <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 700 }}>Manage Users</h2>
+          <p style={{ color: "#8B948E", fontSize: 13, margin: "0 0 16px" }}>Assign anyone who registered to Admin or Guest.</p>
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 12px", border: "1px solid #1E2320", borderRadius: 8, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{fullName(currentUser)} (you)</div>
+              <div className="mono" style={{ fontSize: 10.5, color: "#4ADE9C" }}>SUPER ADMIN</div>
+            </div>
+          </div>
+
+          {users.filter(u => u.role !== "superadmin").length === 0 ? (
+            <EmptyRow text="No other registered users yet." />
+          ) : (
+            <div style={{ display: "grid", gap: 8, maxHeight: 360, overflowY: "auto" }} className="scrollbar">
+              {users.filter(u => u.role !== "superadmin").map(u => (
+                <div key={u.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 12px", border: "1px solid #1E2320", borderRadius: 8, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{fullName(u)}</div>
+                    <div className="mono" style={{ fontSize: 10.5, color: ROLE_COLOR[u.role] }}>{ROLE_LABEL[u.role].toUpperCase()}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    {u.role !== "admin" && (
+                      <button onClick={() => setUserRole(u.id, "admin")} style={{ background: "transparent", border: "1px solid #6E9FB055", borderRadius: 6, padding: "6px 10px", color: "#6E9FB0", fontSize: 11.5, fontWeight: 600 }}>Make Admin</button>
+                    )}
+                    {u.role !== "guest" && (
+                      <button onClick={() => setUserRole(u.id, "guest")} style={{ background: "transparent", border: "1px solid #262B27", borderRadius: 6, padding: "6px 10px", color: "#8B948E", fontSize: 11.5, fontWeight: 600 }}>Make Guest</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+            <button onClick={() => setManageUsersOpen(false)} style={{ flex: 1, background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 8, padding: "11px 0", fontSize: 14 }}>Close</button>
+          </div>
+        </Modal>
+      )}
+
+      {activityLogOpen && (
+        <Modal onClose={() => setActivityLogOpen(false)}>
+          <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 700 }}>Activity Log</h2>
+          <p style={{ color: "#8B948E", fontSize: 13, margin: "0 0 16px" }}>Full activity, visible to Super Admin only.</p>
+          {activity.length === 0 ? (
+            <EmptyRow text="No activity recorded yet." />
+          ) : (
+            <div style={{ display: "grid", gap: 8, maxHeight: 440, overflowY: "auto" }} className="scrollbar">
+              {[...activity].reverse().map(a => (
+                <div key={a.id} style={{ padding: "10px 12px", border: "1px solid #1E2320", borderRadius: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                    <span style={{ fontWeight: 700, fontSize: 13 }}>{a.name}</span>
+                    <span className="mono" style={{ fontSize: 10.5, color: "#8B948E", flexShrink: 0 }}>{fmtDateTime(a.ts)}</span>
+                  </div>
+                  <div className="mono" style={{ fontSize: 10, color: ROLE_COLOR[a.role] || "#8B948E", marginTop: 2 }}>{(ROLE_LABEL[a.role] || a.role || "").toUpperCase()}</div>
+                  <div style={{ fontSize: 12.5, color: "#E8ECE9", marginTop: 4 }}>{a.detail}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+            <button onClick={() => setActivityLogOpen(false)} style={{ flex: 1, background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 8, padding: "11px 0", fontSize: 14 }}>Close</button>
+          </div>
+        </Modal>
+      )}
+
+      {rateChooserOpen && (
+        <Modal onClose={() => setRateChooserOpen(false)} narrow>
+          <h2 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 700 }}>Edit Rate Card</h2>
+          <p style={{ color: "#8B948E", fontSize: 13, margin: "0 0 16px" }}>Pick a client + city to update their rates, or add a new one.</p>
+          <button onClick={() => { setRateChooserOpen(false); openAddRate(); }}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", background: "transparent", color: "#4ADE9C", border: "1px solid #4ADE9C55", borderRadius: 8, padding: "12px 14px", fontWeight: 600, fontSize: 14, marginBottom: 14 }}>
+            <Plus size={16} /> Add Rate
+          </button>
+          {rateCard.length === 0 ? (
+            <div className="mono" style={{ fontSize: 12, color: "#8B948E", lineHeight: 1.6 }}>
+              No rate card entries yet. Use Add Rate above, or Top Up Tokens → New Client to set one up.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 8 }}>
+              {rateCard.map(rate => (
+                <button key={rate.id} onClick={() => { setRateChooserOpen(false); openEditRate(rate); }}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "transparent", border: "1px solid #262B27", borderRadius: 8, padding: "12px 14px", color: "#E8ECE9", fontSize: 14, fontWeight: 600, textAlign: "left" }}>
+                  {rate.client} — {rate.city}
+                  <Pencil size={13} color="#8B948E" />
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+            <button onClick={() => setRateChooserOpen(false)} style={{ flex: 1, background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 8, padding: "11px 18px", fontSize: 14 }}>Close</button>
+          </div>
+        </Modal>
+      )}
+
+      {topUpModalOpen && (
+        <Modal onClose={() => setTopUpModalOpen(false)} narrow>
+          <h2 style={{ margin: "0 0 18px", fontSize: 18, fontWeight: 700 }}>Token Top-Up</h2>
+          <div style={{ display: "grid", gap: 14 }}>
+            <Field label="Top up for">
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className="type-btn" onClick={() => { setTopUpMode("existing"); setTopUpError(""); }}
+                  style={{
+                    flex: 1, padding: "12px 0", borderRadius: 8, fontWeight: 600, fontSize: 14,
+                    border: topUpMode === "existing" ? "1px solid #6E9FB0" : "1px solid #262B27",
+                    background: topUpMode === "existing" ? "#6E9FB022" : "transparent",
+                    color: topUpMode === "existing" ? "#6E9FB0" : "#8B948E"
+                  }}>Existing Client</button>
+                <button type="button" className="type-btn" onClick={() => { setTopUpMode("new"); setTopUpError(""); }}
+                  style={{
+                    flex: 1, padding: "12px 0", borderRadius: 8, fontWeight: 600, fontSize: 14,
+                    border: topUpMode === "new" ? "1px solid #4ADE9C" : "1px solid #262B27",
+                    background: topUpMode === "new" ? "#4ADE9C22" : "transparent",
+                    color: topUpMode === "new" ? "#4ADE9C" : "#8B948E"
+                  }}>New Client</button>
+              </div>
+            </Field>
+
+            {topUpMode === "new" ? (
+              <div className="mono" style={{ fontSize: 12, color: "#8B948E", lineHeight: 1.6 }}>
+                This opens the Add Request form, pre-set to Token, so you can set up the new client's first batch of tokens.
+              </div>
+            ) : (
+              <React.Fragment>
+                {requests.filter(isTokenAccount).length === 0 ? (
+                  <div className="mono" style={{ fontSize: 12, color: "#8B948E" }}>No token requests on file yet — start with a new client instead.</div>
+                ) : (
+                  <React.Fragment>
+                    <Field label="Client / request">
+                      <select value={topUpRequestId} onChange={e => { setTopUpRequestId(e.target.value); setTopUpError(""); }} style={selectStyle}>
+                        <option value="">Please select a request</option>
+                        {requests.filter(isTokenAccount).map(r => (
+                          <option key={r.id} value={r.id}>{r.client} · {r.refNo} (balance: ${r.tokenCount.toLocaleString()})</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Amount to top up ($)">
+                      <input type="number" min="1" value={topUpAmount}
+                        onChange={e => { setTopUpAmount(e.target.value); setTopUpError(""); }}
+                        style={inputStyle} placeholder="E.G. 5" />
+                    </Field>
+                  </React.Fragment>
+                )}
+              </React.Fragment>
+            )}
+            {topUpError && <div style={{ color: "#F2545B", fontSize: 11.5 }}>{topUpError}</div>}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
+            {topUpMode === "new" ? (
+              <button onClick={goToNewClientTopUp} style={{ flex: 1, background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14 }}>
+                Continue to Add Request
+              </button>
+            ) : (
+              <button onClick={submitTopUp} disabled={saving || requests.filter(isTokenAccount).length === 0}
+                style={{ flex: 1, background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14, opacity: (saving || requests.filter(isTokenAccount).length === 0) ? 0.5 : 1 }}>
+                {saving ? "Saving…" : "Top up"}
+              </button>
+            )}
+            <button onClick={() => setTopUpModalOpen(false)} disabled={saving} style={{ background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 8, padding: "11px 18px", fontSize: 14 }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {modalOpen && (() => {
+        const editingAccount = editingId ? isTokenAccount(requests.find(r => r.id === editingId) || {}) : false;
+        return (
+        <Modal onClose={() => setModalOpen(false)}>
+          <h2 style={{ margin: "0 0 18px", fontSize: 18, fontWeight: 700 }}>{editingId ? "Edit Request" : "Add Request"}</h2>
+          <div style={{ display: "grid", gap: 14 }}>
+            <Field label="Reference No." error={fieldErrors.refNo}>
+              <TextInput value={form.refNo} onChange={v => setForm({ ...form, refNo: v })} placeholder="E.G. GVMS01234 / IN1234 / CS4321" uppercase error={!!fieldErrors.refNo} />
+            </Field>
+            <Field label="Region" error={fieldErrors.region}>
+              <select value={form.region} onChange={e => setForm({ ...form, region: e.target.value })}
+                style={fieldErrors.region ? { ...selectStyle, border: "1px solid #F2545B", textTransform: "uppercase" } : { ...selectStyle, textTransform: "uppercase" }}>
+                <option value="">Select a country</option>
+                {COUNTRIES.map(country => <option key={country} value={country}>{country}</option>)}
+              </select>
+            </Field>
+            <Field label="Client" error={fieldErrors.client}>
+              {includeRateInputs ? (
+                <React.Fragment>
+                  <TextInput value={form.client} onChange={v => setForm({ ...form, client: v })} placeholder="ENTER NEW CLIENT NAME" uppercase error={!!fieldErrors.client} />
+                  <div className="mono" style={{ fontSize: 10.5, color: "#8B948E", marginTop: 6 }}>
+                    New client — this will be added to the client list once saved.
+                  </div>
+                </React.Fragment>
+              ) : form.type === "adhoc" ? (
+                <ClientSelect value={form.client} onChange={v => setForm({ ...form, client: v, city: "" })}
+                  options={clientsList} error={!!fieldErrors.client} />
+              ) : (
+                <select value={form.client} onChange={e => setForm({ ...form, client: e.target.value, city: "" })}
+                  style={fieldErrors.client ? { ...selectStyle, border: "1px solid #F2545B" } : selectStyle}>
+                  <option value="">Please select client</option>
+                  {clientsList.map(client => <option key={client} value={client}>{client}</option>)}
+                </select>
+              )}
+            </Field>
+            {!includeRateInputs && form.type === "token" && (
+              <Field label="City" error={fieldErrors.city}>
+                <CitySelect value={form.city} onChange={v => setForm({ ...form, city: v })} options={allCities(rateCard)}
+                  error={!!fieldErrors.city} />
+                <div className="mono" style={{ fontSize: 10.5, color: "#8B948E", marginTop: 6 }}>
+                  Rate is matched by client + city.
+                </div>
+              </Field>
+            )}
+            <Field label="Site Address" error={fieldErrors.address}>
+              <TextInput value={form.address} onChange={v => setForm({ ...form, address: v })} placeholder="E.G. XYZ STREET 12" uppercase error={!!fieldErrors.address} />
+            </Field>
+            <Field label="Description">
+              <textarea value={form.scope} onChange={e => setForm({ ...form, scope: e.target.value.toUpperCase() })}
+                placeholder="DESCRIBE THE JOB / SCOPE OF WORK"
+                rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "'Space Grotesk', sans-serif" }} />
+            </Field>
+
+            <Field label="Request type">
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className="type-btn" onClick={() => setForm({ ...form, type: "adhoc", city: "" })}
+                  style={{
+                    flex: 1, padding: "12px 0", borderRadius: 8, fontWeight: 600, fontSize: 14,
+                    border: form.type === "adhoc" ? "1px solid #4ADE9C" : "1px solid #262B27",
+                    background: form.type === "adhoc" ? "#4ADE9C22" : "transparent",
+                    color: form.type === "adhoc" ? "#4ADE9C" : "#8B948E"
+                  }}>Adhoc</button>
+                <button type="button" className="type-btn" onClick={() => setForm({ ...form, type: "token" })}
+                  style={{
+                    flex: 1, padding: "12px 0", borderRadius: 8, fontWeight: 600, fontSize: 14,
+                    border: form.type === "token" ? "1px solid #6E9FB0" : "1px solid #262B27",
+                    background: form.type === "token" ? "#6E9FB022" : "transparent",
+                    color: form.type === "token" ? "#6E9FB0" : "#8B948E"
+                  }}>Token</button>
+              </div>
+            </Field>
+
+            {includeRateInputs && (
+              <div style={{ border: "1px solid #4ADE9C33", borderRadius: 10, padding: 14, display: "grid", gap: 12 }}>
+                <div className="mono" style={{ fontSize: 11, color: "#4ADE9C", letterSpacing: 0.5 }}>RATE CARD FOR THIS CLIENT + CITY</div>
+                <div className="mono" style={{ fontSize: 10.5, color: "#8B948E", marginTop: -6 }}>
+                  Optional — fill in whichever hourly rates apply. This saves straight to the Rate Card.
+                </div>
+                <Field label="City" error={fieldErrors.city}>
+                  <TextInput value={form.city} onChange={v => setForm({ ...form, city: v })} placeholder="E.G. TOKYO" uppercase error={!!fieldErrors.city} />
+                </Field>
+                <Field label="Amount ($) per hour · Weekday Business Hours" error={rateInputErrors.hourRateWeekdayBiz}>
+                  <input type="number" min="0" step="0.01" value={rateInputs.hourRateWeekdayBiz}
+                    onChange={e => setRateInputs({ ...rateInputs, hourRateWeekdayBiz: e.target.value })}
+                    style={rateInputErrors.hourRateWeekdayBiz ? { ...inputStyle, border: "1px solid #F2545B" } : inputStyle} />
+                </Field>
+                <Field label="Amount ($) per hour · Weekday After Office Hours" error={rateInputErrors.hourRateWeekdayAfter}>
+                  <input type="number" min="0" step="0.01" value={rateInputs.hourRateWeekdayAfter}
+                    onChange={e => setRateInputs({ ...rateInputs, hourRateWeekdayAfter: e.target.value })}
+                    style={rateInputErrors.hourRateWeekdayAfter ? { ...inputStyle, border: "1px solid #F2545B" } : inputStyle} />
+                </Field>
+                <Field label="Amount ($) per hour · Weekend" error={rateInputErrors.hourRateWeekend}>
+                  <input type="number" min="0" step="0.01" value={rateInputs.hourRateWeekend}
+                    onChange={e => setRateInputs({ ...rateInputs, hourRateWeekend: e.target.value })}
+                    style={rateInputErrors.hourRateWeekend ? { ...inputStyle, border: "1px solid #F2545B" } : inputStyle} />
+                </Field>
+                <Field label="Starting Amount ($)" error={fieldErrors.tokenCount}>
+                  <input type="number" min="1" value={form.tokenCount}
+                    onChange={e => setForm({ ...form, tokenCount: e.target.value })}
+                    style={fieldErrors.tokenCount ? { ...inputStyle, border: "1px solid #F2545B" } : inputStyle} />
+                </Field>
+              </div>
+            )}
+
+            {!includeRateInputs && (
+              <Field label="Request date" error={fieldErrors.requestDate}>
+                <TextInput type="date" value={form.requestDate} onChange={v => setForm({ ...form, requestDate: v })} error={!!fieldErrors.requestDate} />
+              </Field>
+            )}
+            {editingAccount && (
+              <Field label="Balance ($)" error={fieldErrors.tokenCount}>
+                <input type="number" min="0" value={form.tokenCount} disabled={!isSuperAdmin}
+                  onChange={e => setForm({ ...form, tokenCount: e.target.value })}
+                  style={fieldErrors.tokenCount ? { ...inputStyle, border: "1px solid #F2545B" } : { ...inputStyle, opacity: isSuperAdmin ? 1 : 0.6, cursor: isSuperAdmin ? "text" : "not-allowed" }} />
+                {!isSuperAdmin && (
+                  <div className="mono" style={{ fontSize: 10.5, color: "#8B948E", marginTop: 6 }}>
+                    Only Super Admin can adjust this balance directly. Use Top Up Tokens to add to it.
+                  </div>
+                )}
+              </Field>
+            )}
+            {!includeRateInputs && !editingAccount && (
+              <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <Field label="Start time" error={fieldErrors.startTime}>
+                    <HourSelect value={form.startTime} onChange={v => setForm({ ...form, startTime: v })} error={!!fieldErrors.startTime} />
+                  </Field>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <Field label="End time" error={fieldErrors.endTime}>
+                    <HourSelect value={form.endTime} onChange={v => setForm({ ...form, endTime: v })} error={!!fieldErrors.endTime} />
+                  </Field>
+                </div>
+              </div>
+            )}
+            {!includeRateInputs && !editingAccount && form.type === "token" && (() => {
+              const tier = deriveHourTier(form.requestDate, form.startTime);
+              const hours = hoursBetween(form.startTime, form.endTime);
+              if (!tier || hours == null) return (
+                <div className="mono" style={{ fontSize: 10.5, color: "#8B948E" }}>
+                  Fill in start and end time to see the rate tier and estimated cost.
+                </div>
+              );
+              const tierInfo = HOUR_TIERS.find(t => t.value === tier) || HOUR_TIERS[0];
+              const matched = findRate(rateCard, form.client, form.city);
+              const rate = matched ? matched[tierInfo.rateField] : null;
+              const cost = rate != null ? Math.round(rate * hours * 100) / 100 : null;
+              const accountKey = form.client.trim().toLowerCase() + "|" + form.city.trim().toLowerCase();
+              const account = requests.find(a => isTokenAccount(a) && a.client.trim().toLowerCase() + "|" + (a.city || "").trim().toLowerCase() === accountKey);
+              const isPast = form.requestDate < todayStr();
+              return (
+                <div className="mono" style={{ fontSize: 10.5, color: "#6E9FB0" }}>
+                  <div>
+                    {tierInfo.label} · {hours}h
+                    {rate != null
+                      ? ` · rate on file: $${rate}/hr · est. $${cost.toLocaleString()} total`
+                      : " · no rate on file for this client/city + tier — nothing will be deducted."}
+                  </div>
+                  {cost != null && (
+                    <div style={{ marginTop: 3, color: "#4ADE9C" }}>
+                      {!account
+                        ? `No Active Tokens account for ${form.client} · ${form.city} yet — nothing will be deducted until one exists.`
+                        : isPast
+                          ? `Will deduct $${cost.toLocaleString()} from ${form.client}'s balance (currently $${(account.tokenCount || 0).toLocaleString()}) shortly after saving.`
+                          : `Deducts $${cost.toLocaleString()} from ${form.client}'s balance (currently $${(account.tokenCount || 0).toLocaleString()}) once ${fmtShort(form.requestDate)} has passed.`}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            {formSaveError && <div style={{ color: "#F2545B", fontSize: 12.5 }}>{formSaveError}</div>}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
+            <button onClick={saveForm} disabled={saving} style={{ flex: 1, background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14, opacity: saving ? 0.6 : 1 }}>
+              {saving ? "Saving…" : editingId ? "Save changes" : "Add request"}
+            </button>
+            <button onClick={() => setModalOpen(false)} disabled={saving} style={{ background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 8, padding: "11px 18px", fontSize: 14 }}>Cancel</button>
+          </div>
+        </Modal>
+        );
+      })()}
+
+      {confirmDelete && (
+        <Modal onClose={() => setConfirmDelete(null)} narrow>
+          <h2 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 700 }}>Delete this request?</h2>
+          <p style={{ color: "#8B948E", fontSize: 13, margin: "0 0 20px" }}>This removes the request and its visit history. This can't be undone.</p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button onClick={() => deleteRequest(confirmDelete)} disabled={saving} style={{ flex: 1, background: "#F2545B", color: "#0B0E0C", border: "none", borderRadius: 8, padding: "11px 0", fontWeight: 600, fontSize: 14, opacity: saving ? 0.6 : 1 }}>
+              {saving ? "Deleting…" : "Delete"}
+            </button>
+            <button onClick={() => setConfirmDelete(null)} disabled={saving} style={{ background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 8, padding: "11px 18px", fontSize: 14 }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function StatBox({ label, value, color }) {
+  return (
+    <div style={{ background: "#0E1210", border: "1px solid #1E2320", borderRadius: 10, padding: "14px 16px" }}>
+      <div className="mono" style={{ fontSize: 10, letterSpacing: 1.5, color: "#8B948E", marginBottom: 6 }}>{label}</div>
+      <div className="mono" style={{ fontSize: 26, fontWeight: 700, color }}>{value}</div>
+    </div>
+  );
+}
+function SectionHeader({ title, sub }) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14 }}>
+      <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>{title}</h2>
+      <span className="mono" style={{ fontSize: 11, color: "#8B948E" }}>{sub}</span>
+    </div>
+  );
+}
+function EmptyRow({ text }) {
+  return <div style={{ border: "1px dashed #262B27", borderRadius: 10, padding: "28px 20px", textAlign: "center", color: "#8B948E", fontSize: 13 }}>{text}</div>;
+}
+
+function RequestCard({ r, isAdmin, onEdit, onDelete }) {
+  const complete = r.remaining === 0;
+  const ledColor = r.overdueCount > 0 ? "#F2545B" : r.dueSoonCount > 0 ? "#F5A623" : "#4ADE9C";
+  const isToken = r.type === "token";
+  const isAccount = isTokenAccount(r);
+
+  return (
+    <div style={{ background: "#0E1210", border: "1px solid #1E2320", borderRadius: 12, padding: "16px 18px", position: "relative" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, minWidth: 0 }}>
+          <div className="jack jack-glow" style={{ background: ledColor, color: ledColor, marginTop: 6 }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.client || "Untitled client"}</div>
+            <div className="mono" style={{ fontSize: 11, color: "#8B948E" }}>{r.refNo}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+          {isAdmin && (
+            <React.Fragment>
+              <IconBtn onClick={onEdit}><Pencil size={13} /></IconBtn>
+              <IconBtn onClick={onDelete}><Trash2 size={13} /></IconBtn>
+            </React.Fragment>
+          )}
+        </div>
+      </div>
+
+      <div style={{ fontSize: 12.5, color: "#8B948E", margin: "10px 0", lineHeight: 1.5 }}>
+        {r.address || "No address specified"}
+        {r.city && <span className="mono" style={{ color: "#4ADE9C" }}> · {r.city.toUpperCase()}</span>}
+        {r.region && <span className="mono" style={{ color: "#6E9FB0" }}> · {r.region.toUpperCase()}</span>}
+      </div>
+      {isAccount ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 5, margin: "-4px 0 10px", color: "#4ADE9C", fontSize: 11.5, fontWeight: 600 }}>
+          <span className="jack jack-glow" style={{ background: "#4ADE9C", color: "#4ADE9C", width: 6, height: 6 }} /> ACTIVE TOKEN
+        </div>
+      ) : r.scope && (
+        <div style={{ fontSize: 12, color: "#8B948E", margin: "-4px 0 10px", lineHeight: 1.5, fontStyle: "italic" }}>
+          {r.scope}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
+        <div>
+          <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>TYPE</div>
+          <div className="mono" style={{ display: "flex", alignItems: "center", gap: 5, color: isToken ? "#6E9FB0" : "#4ADE9C" }}>
+            <Ticket size={12} /> {isToken
+              ? `TOKEN${r.hourTier ? " · " + (HOUR_TIERS.find(t => t.value === r.hourTier) || HOUR_TIERS[0]).label.toUpperCase() : ""}`
+              : "ADHOC"}
+          </div>
+        </div>
+        <div>
+          <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>REQUESTED</div>
+          <div className="mono">{fmtShort(r.requestDate)}</div>
+        </div>
+        {(r.startTime || r.endTime) && (
+          <div>
+            <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>TIME</div>
+            <div className="mono">{r.startTime || "?"} – {r.endTime || "?"}</div>
+          </div>
+        )}
+        {isAccount && (
+          <div>
+            <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>BALANCE</div>
+            <div className="mono" style={{ color: "#4ADE9C" }}>${r.tokenCount.toLocaleString()}</div>
+          </div>
+        )}
+        {isToken && !isAccount && (
+          <div>
+            <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>DEDUCTION</div>
+            <div className="mono" style={{ color: r.deductionApplied ? "#4ADE9C" : "#F5A623" }}>
+              {r.deductionApplied
+                ? (r.deductedAmount > 0 ? `-$${r.deductedAmount.toLocaleString()} applied` : "None")
+                : (r.estCost != null ? `Pending · est. $${r.estCost.toLocaleString()}` : "Pending")}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {r.overdueCount > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, color: "#F2545B", fontSize: 11 }}>
+          <AlertTriangle size={12} /> {r.overdueCount} visit{r.overdueCount > 1 ? "s" : ""} overdue
+        </div>
+      )}
+      {r.overdueCount === 0 && r.dueSoonCount > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, color: "#F5A623", fontSize: 11 }}>
+          <Clock size={12} /> {r.dueSoonCount} visit{r.dueSoonCount > 1 ? "s" : ""} due soon
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+function IconBtn({ children, onClick }) {
+  return <button onClick={onClick} style={{ background: "transparent", border: "1px solid #262B27", borderRadius: 6, padding: 6, color: "#8B948E", display: "flex" }}>{children}</button>;
+}
+function Modal({ children, onClose, narrow }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50 }}>
+      <div onClick={e => e.stopPropagation()} className="scrollbar" style={{ background: "#0E1210", border: "1px solid #262B27", borderRadius: 14, padding: 24, width: "100%", maxWidth: narrow ? 380 : 460, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#8B948E", marginTop: -8, marginRight: -8 }}><XIcon size={18} /></button>
+        </div>
+        <div style={{ marginTop: -28 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+function Field({ label, children, error }) {
+  return (
+    <div>
+      <label className="mono" style={{ fontSize: 11, color: error ? "#F2545B" : "#8B948E", display: "block", marginBottom: 6, letterSpacing: 0.5 }}>{label.toUpperCase()}</label>
+      {children}
+      {error && <div style={{ color: "#F2545B", fontSize: 11.5, marginTop: 5 }}>{error}</div>}
+    </div>
+  );
+}
+const inputStyle = { width: "100%", background: "#0B0E0C", border: "1px solid #262B27", borderRadius: 7, padding: "10px 12px", color: "#E8ECE9", fontSize: 14, outline: "none", colorScheme: "dark" };
+const selectStyle = { ...inputStyle, appearance: "auto" };
+
+function ClientSelect({ value, onChange, options, error }) {
+  const [newMode, setNewMode] = React.useState(false);
+  const known = options.includes(value);
+  const isNew = newMode || (!!value && !known);
+  return (
+    <div>
+      <select value={isNew ? "__new__" : (known ? value : "")}
+        onChange={e => {
+          const v = e.target.value;
+          if (v === "__new__") { setNewMode(true); onChange(""); }
+          else { setNewMode(false); onChange(v); }
+        }}
+        style={error ? { ...selectStyle, border: "1px solid #F2545B" } : selectStyle}>
+        <option value="">Please select client</option>
+        {options.map(c => <option key={c} value={c}>{c}</option>)}
+        <option value="__new__">+ New Client</option>
+      </select>
+      {isNew && (
+        <div style={{ marginTop: 8 }}>
+          <TextInput value={value} onChange={onChange} placeholder="ENTER CLIENT NAME" uppercase error={error} />
+          <div className="mono" style={{ fontSize: 10.5, color: "#8B948E", marginTop: 6 }}>
+            One-off client for this request — won't be added to the Token client list.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => {
+  const period = h < 12 ? "AM" : "PM";
+  const displayHour = (h % 12) || 12;
+  return { value: String(h).padStart(2, "0") + ":00", label: `${displayHour}:00 ${period}` };
+});
+function HourSelect({ value, onChange, error }) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={error ? { ...selectStyle, border: "1px solid #F2545B" } : selectStyle}>
+      <option value="">Select hour</option>
+      {HOUR_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
+    </select>
+  );
+}
+function CitySelect({ value, onChange, options, error }) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={error ? { ...selectStyle, border: "1px solid #F2545B", textTransform: "uppercase" } : { ...selectStyle, textTransform: "uppercase" }}>
+      <option value="">Select a city</option>
+      {options.map(c => <option key={c} value={c}>{c}</option>)}
+    </select>
+  );
+}
+function TextInput({ value, onChange, placeholder, type = "text", uppercase = false, error = false }) {
+  const base = uppercase ? { ...inputStyle, textTransform: "uppercase" } : inputStyle;
+  const withCursor = type === "date" ? { ...base, cursor: "pointer" } : base;
+  return (
+    <input type={type} value={value} onChange={e => onChange(uppercase ? e.target.value.toUpperCase() : e.target.value)}
+      onClick={e => { if (type === "date" && e.target.showPicker) { try { e.target.showPicker(); } catch (err) {} } }}
+      placeholder={placeholder} style={error ? { ...withCursor, border: "1px solid #F2545B" } : withCursor} />
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<Dashboard />);
+</script>
+</body>
+</html>
