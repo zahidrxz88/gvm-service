@@ -332,6 +332,7 @@ var d=null!=c&&c.hydratedSources||null,e=!1,f="",g=aj;null!==c&&void 0!==c&&(!0=
 function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmountComponentAtNode=function(a){if(!Vd(a))throw Error(m(40));return a._reactRootContainer?(yb(function(){Wd(null,null,a,!1,function(){a._reactRootContainer=null;a[Ja]=null})}),!0):!1};Q.unstable_batchedUpdates=Tf;Q.unstable_renderSubtreeIntoContainer=function(a,b,c,d){if(!Vd(c))throw Error(m(200));if(null==a||void 0===a._reactInternals)throw Error(m(38));return Wd(a,b,c,!1,d)};Q.version="18.3.1-next-f1338f8080-20240426"});
 })();
 </script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>const {
   useState,
   useEffect,
@@ -340,171 +341,95 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 } = React;
 
 // ============ SUPABASE CONFIG ============
-const SUPABASE_URL = "https://aoaigepwbskasvzptjaz.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFvYWlnZXB3YnNrYXN2enB0amF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxMDU4NTcsImV4cCI6MjA5OTY4MTg1N30.wUesp90JZF-N8Z2t6y7XSS47vrlcpMTvWlX9AhTIwZc";
+// Same project and same client library as the Adhoc / Token app, so both dashboards
+// share one saved login (same origin + same project = same session storage key).
+const SUPABASE_URL = "https://jkwakavosclpnbtyyltx.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imprd2FrYXZvc2NscG5idHl5bHR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk4NDcwMDcsImV4cCI6MjEwNTQyMzAwN30.NNgTpapEFBInQRaekXCN34HIN0UkGTW7oznn2PoVkH0";
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// kv helpers ride on the current Supabase Auth session (kv_store RLS requires a logged-in user)
 async function kvGet(key) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/kv_store?key=eq.${key}&select=value`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`
-    }
-  });
-  if (!res.ok) throw new Error("kvGet failed: " + res.status);
-  const data = await res.json();
-  return data && data[0] ? data[0].value : null;
+  const {
+    data,
+    error
+  } = await sb.from("kv_store").select("value").eq("key", key).maybeSingle();
+  if (error) throw error;
+  return data ? data.value : null;
 }
-async function kvSet(key, value, accessToken) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/kv_store?on_conflict=key`, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${accessToken || SUPABASE_ANON_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: "resolution=merge-duplicates"
-    },
-    body: JSON.stringify([{
-      key,
-      value,
-      updated_at: new Date().toISOString()
-    }])
+async function kvSet(key, value) {
+  const {
+    error
+  } = await sb.from("kv_store").upsert({
+    key,
+    value,
+    updated_at: new Date().toISOString()
   });
-  if (!res.ok) throw new Error("kvSet failed: " + res.status);
+  if (error) throw error;
 }
 async function kvList(keyPrefix) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/kv_store?key=like.${keyPrefix}*&select=key,value,updated_at`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`
-    }
-  });
-  if (!res.ok) throw new Error("kvList failed: " + res.status);
-  return res.json();
+  const {
+    data,
+    error
+  } = await sb.from("kv_store").select("key,value,updated_at").like("key", `${keyPrefix}%`);
+  if (error) throw error;
+  return data || [];
 }
 
-// ============ AUTH (Supabase GoTrue REST — no SDK, same hand-rolled-fetch pattern as kvGet/kvSet) ============
-const AUTH_SESSION_KEY = "gvm_auth_session";
-function loadStoredSession() {
-  try {
-    const raw = localStorage.getItem(AUTH_SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) {
-    return null;
-  }
+// ---------- profiles / activity_log ----------
+// profiles.role is the Adhoc / Token role; this app's role lives in profiles.pm_role.
+// Rows are mapped to { ...row, role: pm_role } so the rest of this file keeps reading `.role`.
+const withPmRole = p => p ? {
+  ...p,
+  role: p.pm_role
+} : null;
+async function fetchMyProfile(userId) {
+  const {
+    data,
+    error
+  } = await sb.from("profiles").select("id,email,pm_role").eq("id", userId).maybeSingle();
+  if (error) throw new Error("Could not load profile");
+  return withPmRole(data);
 }
-function storeSession(session) {
-  try {
-    if (session) localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));else localStorage.removeItem(AUTH_SESSION_KEY);
-  } catch (e) {/* ignore */}
-}
-async function authRequest(path, body) {
-  const res = await fetch(`${SUPABASE_URL}/auth/v1${path}`, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
+async function fetchAllProfiles() {
+  const {
+    data,
+    error
+  } = await sb.from("profiles").select("id,email,first_name,last_name,pm_role,created_at").order("created_at", {
+    ascending: true
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error_description || data.msg || data.error || data.message || "Request failed");
-  return data;
+  if (error) throw new Error("Could not load users");
+  return (data || []).map(withPmRole);
 }
-const authSignUp = (email, password) => authRequest("/signup", {
-  email,
-  password
-});
-const authSignIn = (email, password) => authRequest("/token?grant_type=password", {
-  email,
-  password
-});
-const authRefresh = refreshToken => authRequest("/token?grant_type=refresh_token", {
-  refresh_token: refreshToken
-});
-async function authSignOut(accessToken) {
+async function updateUserRole(userId, role) {
+  const {
+    data,
+    error
+  } = await sb.rpc("set_pm_role", {
+    target_id: userId,
+    new_role: role
+  });
+  if (error || !data) throw new Error("Could not update role");
+}
+async function fetchActivityLog() {
+  const {
+    data,
+    error
+  } = await sb.from("activity_log").select("*").order("created_at", {
+    ascending: false
+  }).limit(300);
+  if (error) throw new Error("Could not load activity log");
+  return data || [];
+}
+async function logActivity(actorEmail, action, details) {
   try {
-    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${accessToken}`
-      }
+    const {
+      error
+    } = await sb.from("activity_log").insert({
+      actor_email: actorEmail,
+      action,
+      details: details || {}
     });
-  } catch (e) {/* best-effort */}
-}
-function sessionFromAuthResponse(data) {
-  if (!data || !data.access_token) return null;
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
-    user: data.user
-  };
-}
-
-// ---------- profiles / activity_log (PostgREST, authenticated as the caller's JWT) ----------
-async function fetchMyProfile(accessToken, userId) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=id,email,role`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${accessToken}`
-    }
-  });
-  if (!res.ok) throw new Error("Could not load profile");
-  const data = await res.json();
-  return data && data[0] ? data[0] : null;
-}
-async function fetchAllProfiles(accessToken) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=id,email,role,created_at&order=created_at.asc`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${accessToken}`
-    }
-  });
-  if (!res.ok) throw new Error("Could not load users");
-  return res.json();
-}
-async function updateUserRole(accessToken, userId, role) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}`, {
-    method: "PATCH",
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      Prefer: "return=minimal"
-    },
-    body: JSON.stringify({
-      role
-    })
-  });
-  if (!res.ok) throw new Error("Could not update role");
-}
-async function fetchActivityLog(accessToken) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/activity_log?select=*&order=created_at.desc&limit=300`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${accessToken}`
-    }
-  });
-  if (!res.ok) throw new Error("Could not load activity log");
-  return res.json();
-}
-async function logActivity(accessToken, actorEmail, action, details) {
-  if (!accessToken) return;
-  try {
-    await fetch(`${SUPABASE_URL}/rest/v1/activity_log`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        Prefer: "return=minimal"
-      },
-      body: JSON.stringify([{
-        actor_email: actorEmail,
-        action,
-        details: details || {}
-      }])
-    });
+    if (error) throw error;
   } catch (e) {
     console.error("activity log failed", e);
   }
@@ -730,9 +655,8 @@ function Dashboard() {
   const [form, setForm] = useState(emptyForm);
   const [fieldErrors, setFieldErrors] = useState({});
   const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
   const [profile, setProfile] = useState(null);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -755,85 +679,72 @@ function Dashboard() {
   const [filterMonth, setFilterMonth] = useState("");
   const [onlineUsers, setOnlineUsers] = useState([]);
   const lastSyncedRef = useRef("");
-  const sessionRef = useRef(null);
-  useEffect(() => {
-    sessionRef.current = session;
-  }, [session]);
+  const userId = session ? session.user.id : null;
 
-  const applySession = async rawSession => {
-    setSession(rawSession);
-    storeSession(rawSession);
-    if (!rawSession) {
-      setProfile(null);
-      return;
-    }
-    try {
-      const p = await fetchMyProfile(rawSession.accessToken, rawSession.user.id);
-      setProfile(p);
-    } catch (e) {
-      console.error("load profile failed", e);
-      setProfile(null);
-    }
-  };
-
-  // load
+  // track the Supabase Auth session; supabase-js restores, refreshes and shares it with the
+  // Adhoc / Token frame (logging in or out in either dashboard applies to both)
   useEffect(() => {
+    const {
+      data: sub
+    } = sb.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setAuthReady(true);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // load my profile (for my PM role) whenever the logged-in user changes
+  useEffect(() => {
+    setProfile(null);
+    if (!userId) return;
+    let cancelled = false;
+    fetchMyProfile(userId).then(p => {
+      if (!cancelled) setProfile(p);
+    }).catch(e => console.error("load profile failed", e));
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  // load contracts once logged in; clear them back out on logout
+  useEffect(() => {
+    setLoaded(false);
+    setContracts([]);
+    lastSyncedRef.current = "";
+    if (!userId) return;
+    let cancelled = false;
     (async () => {
       try {
         const remote = await kvGet("contracts");
-        if (remote) {
-          setContracts(remote);
-          lastSyncedRef.current = JSON.stringify(remote);
-        }
+        if (cancelled) return;
+        const initial = remote || [];
+        lastSyncedRef.current = JSON.stringify(initial);
+        setContracts(initial);
+        setLoaded(true);
       } catch (e) {
+        // stay not-loaded so nothing gets saved over the real list
         console.error("load contracts failed", e);
       }
-      try {
-        const stored = loadStoredSession();
-        if (stored) {
-          if (stored.expiresAt - Date.now() > 60000) {
-            await applySession(stored);
-          } else {
-            const refreshed = sessionFromAuthResponse(await authRefresh(stored.refreshToken));
-            if (refreshed) await applySession(refreshed);else storeSession(null);
-          }
-        }
-      } catch (e) {
-        console.error("restore session failed", e);
-        storeSession(null);
-      }
-      setLoaded(true);
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
-  // keep the Supabase session fresh (access tokens expire after ~1h)
+  // save contracts (only real local changes, and only for roles allowed to write)
   useEffect(() => {
-    if (!session) return;
-    const interval = setInterval(async () => {
-      const current = sessionRef.current;
-      if (!current || current.expiresAt - Date.now() > 5 * 60000) return;
-      try {
-        const refreshed = sessionFromAuthResponse(await authRefresh(current.refreshToken));
-        if (refreshed) await applySession(refreshed);
-      } catch (e) {
-        console.error("refresh session failed", e);
-      }
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [session]);
-
-  // save contracts
-  useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || !isUser) return;
+    const json = JSON.stringify(contracts);
+    if (json === lastSyncedRef.current) return;
     (async () => {
       try {
-        await kvSet("contracts", contracts, sessionRef.current && sessionRef.current.accessToken);
-        lastSyncedRef.current = JSON.stringify(contracts);
+        await kvSet("contracts", contracts);
+        lastSyncedRef.current = json;
       } catch (e) {
         console.error("save failed", e);
       }
     })();
-  }, [contracts, loaded]);
+  }, [contracts, loaded, isUser]);
 
   // poll for updates from other viewers every 10s
   useEffect(() => {
@@ -859,7 +770,7 @@ function Dashboard() {
       try {
         await kvSet(`presence:${profile.id}`, {
           email: profile.email
-        }, sessionRef.current && sessionRef.current.accessToken);
+        });
       } catch (e) {/* ignore transient heartbeat errors */}
     };
     beat();
@@ -874,6 +785,10 @@ function Dashboard() {
 
   // poll who else is online (a presence row counts as online for 25s after its last heartbeat)
   useEffect(() => {
+    if (!userId) {
+      setOnlineUsers([]);
+      return;
+    }
     const PRESENCE_STALE_MS = 25000;
     const fetchPresence = async () => {
       try {
@@ -889,7 +804,7 @@ function Dashboard() {
     fetchPresence();
     const interval = setInterval(fetchPresence, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [userId]);
   const openAdd = () => {
     if (!isAdmin) return;
     setForm(emptyForm);
@@ -938,7 +853,7 @@ function Dashboard() {
           schedule
         };
       }));
-      logActivity(sessionRef.current && sessionRef.current.accessToken, profile.email, "contract_edit", {
+      logActivity(profile.email, "contract_edit", {
         contractId: editingId,
         vendor: form.vendor,
         contractName: form.contractName
@@ -951,30 +866,13 @@ function Dashboard() {
         frequency: Number(form.frequency),
         schedule: buildSlots(form, [])
       }]);
-      logActivity(sessionRef.current && sessionRef.current.accessToken, profile.email, "contract_create", {
+      logActivity(profile.email, "contract_create", {
         contractId: newId,
         vendor: form.vendor,
         contractName: form.contractName
       });
     }
     setModalOpen(false);
-  };
-  const openLogin = () => {
-    setAuthMode("login");
-    setAuthEmail("");
-    setAuthPassword("");
-    setAuthError("");
-    setAuthNotice("");
-    setAuthModalOpen(true);
-  };
-  const closeAuthModal = () => {
-    setAuthModalOpen(false);
-    setAuthBusy(false);
-  };
-  const toggleAuthMode = () => {
-    setAuthMode(m => m === "login" ? "signup" : "login");
-    setAuthError("");
-    setAuthNotice("");
   };
   const submitAuth = async () => {
     setAuthError("");
@@ -985,48 +883,57 @@ function Dashboard() {
     }
     setAuthBusy(true);
     try {
-      if (authMode === "signup") {
-        const data = await authSignUp(authEmail.trim(), authPassword);
-        const newSession = sessionFromAuthResponse(data);
-        if (newSession) {
-          await applySession(newSession);
-          logActivity(newSession.accessToken, newSession.user.email, "login", {
-            via: "signup"
-          });
-          setAuthModalOpen(false);
-        } else {
-          setAuthNotice("Account created. Check your email to confirm it, then log in.");
-          setAuthMode("login");
-        }
-      } else {
-        const data = await authSignIn(authEmail.trim(), authPassword);
-        const newSession = sessionFromAuthResponse(data);
-        if (newSession) {
-          await applySession(newSession);
-          logActivity(newSession.accessToken, newSession.user.email, "login", {});
-          setAuthModalOpen(false);
-        }
+      const {
+        data,
+        error
+      } = await sb.auth.signInWithPassword({
+        email: authEmail.trim(),
+        password: authPassword
+      });
+      if (error) {
+        setAuthError(error.message);
+        return;
       }
       setAuthPassword("");
-    } catch (e) {
-      setAuthError(e.message || "Something went wrong.");
+      logActivity(data.user.email, "login", {});
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+  // new accounts and password resets are handled by the Adhoc / Token page (it has the
+  // set-new-password screen), so the reset link points there
+  const submitForgotPassword = async () => {
+    setAuthError("");
+    setAuthNotice("");
+    if (!authEmail.trim()) {
+      setAuthError("Enter your email first.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const {
+        error
+      } = await sb.auth.resetPasswordForEmail(authEmail.trim(), {
+        redirectTo: new URL("adhoc-token.html", window.location.href).href
+      });
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+      setAuthNotice("If an account exists for that email, a password reset link has been sent.");
     } finally {
       setAuthBusy(false);
     }
   };
   const logout = async () => {
-    const current = sessionRef.current;
-    if (current && profile) {
-      await logActivity(current.accessToken, profile.email, "logout", {});
-      await authSignOut(current.accessToken);
-    }
-    await applySession(null);
+    if (profile) await logActivity(profile.email, "logout", {});
+    await sb.auth.signOut();
   };
   const openManageUsers = async () => {
     setManageUsersOpen(true);
     setProfilesError("");
     try {
-      const rows = await fetchAllProfiles(sessionRef.current.accessToken);
+      const rows = await fetchAllProfiles();
       setProfiles(rows);
     } catch (e) {
       setProfilesError(e.message || "Could not load users.");
@@ -1035,12 +942,12 @@ function Dashboard() {
   const changeUserRole = async (userId, newRole) => {
     const target = profiles.find(p => p.id === userId);
     try {
-      await updateUserRole(sessionRef.current.accessToken, userId, newRole);
+      await updateUserRole(userId, newRole);
       setProfiles(ps => ps.map(p => p.id === userId ? {
         ...p,
         role: newRole
       } : p));
-      logActivity(sessionRef.current.accessToken, profile.email, "role_change", {
+      logActivity(profile.email, "role_change", {
         targetEmail: target && target.email,
         fromRole: target && target.role,
         toRole: newRole
@@ -1053,7 +960,7 @@ function Dashboard() {
     setActivityLogOpen(true);
     setActivityLogError("");
     try {
-      const rows = await fetchActivityLog(sessionRef.current.accessToken);
+      const rows = await fetchActivityLog();
       setActivityLog(rows);
     } catch (e) {
       setActivityLogError(e.message || "Could not load activity log.");
@@ -1064,7 +971,7 @@ function Dashboard() {
     const target = contracts.find(c => c.id === id);
     setContracts(cs => cs.filter(c => c.id !== id));
     setConfirmDelete(null);
-    logActivity(sessionRef.current && sessionRef.current.accessToken, profile.email, "contract_delete", {
+    logActivity(profile.email, "contract_delete", {
       contractId: id,
       vendor: target && target.vendor,
       contractName: target && target.contractName
@@ -1079,7 +986,7 @@ function Dashboard() {
         date: dateStr || null
       } : s)
     }));
-    logActivity(sessionRef.current && sessionRef.current.accessToken, profile.email, "pm_date_set", {
+    logActivity(profile.email, "pm_date_set", {
       contractId,
       slotId,
       date: dateStr || null
@@ -1188,6 +1095,111 @@ function Dashboard() {
       expiringSoon
     };
   }, [enriched]);
+  if (!authReady) return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: "100vh",
+      background: "#0B0E0C"
+    }
+  });
+  if (!session) return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: "100vh",
+      background: "#0B0E0C",
+      fontFamily: "'Space Grotesk', sans-serif",
+      color: "#E8ECE9",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 24
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%",
+      maxWidth: 380,
+      background: "#0E1210",
+      border: "1px solid #1E2320",
+      borderRadius: 12,
+      padding: 28
+    }
+  }, /*#__PURE__*/React.createElement("h1", {
+    style: {
+      fontSize: 22,
+      fontWeight: 600,
+      margin: "0 0 4px"
+    }
+  }, "PM Tracker"), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 12,
+      letterSpacing: 2,
+      color: "#8B948E",
+      marginBottom: 20
+    }
+  }, "GLOBAL VISION MULTIMEDIA"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "email",
+    value: authEmail,
+    onChange: e => setAuthEmail(e.target.value),
+    placeholder: "Email",
+    style: inputStyle,
+    autoFocus: true
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: authPassword,
+    onChange: e => setAuthPassword(e.target.value),
+    onKeyDown: e => e.key === "Enter" && submitAuth(),
+    placeholder: "Password",
+    style: inputStyle
+  })), authError && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#F2545B",
+      fontSize: 14,
+      marginTop: 10
+    }
+  }, authError), authNotice && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#4ADE9C",
+      fontSize: 14,
+      marginTop: 10
+    }
+  }, authNotice), /*#__PURE__*/React.createElement("button", {
+    onClick: submitAuth,
+    disabled: authBusy,
+    style: {
+      width: "100%",
+      marginTop: 18,
+      background: "#4ADE9C",
+      color: "#0B0E0C",
+      border: "none",
+      borderRadius: 8,
+      padding: "11px 0",
+      fontWeight: 600,
+      fontSize: 16,
+      opacity: authBusy ? 0.7 : 1
+    }
+  }, authBusy ? "Please wait…" : "Log in"), /*#__PURE__*/React.createElement("button", {
+    onClick: submitForgotPassword,
+    disabled: authBusy,
+    style: {
+      background: "none",
+      border: "none",
+      color: "#6E9FB0",
+      fontSize: 14,
+      marginTop: 16,
+      padding: 0,
+      textDecoration: "underline"
+    }
+  }, "Forgot password?"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "#565F5A",
+      fontSize: 13,
+      margin: "16px 0 0"
+    }
+  }, "One login for PM Tracker and Adhoc / Token. No account yet? Register on the Adhoc / Token tab.")));
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100vh",
@@ -1281,17 +1293,7 @@ function Dashboard() {
     style: {
       color: "#565F5A"
     }
-  }, profile.email), role === "guest" && /*#__PURE__*/React.createElement("button", {
-    onClick: openLogin,
-    style: {
-      background: "none",
-      border: "1px solid #262B27",
-      borderRadius: 6,
-      padding: "5px 9px",
-      color: "#8B948E",
-      fontSize: 13
-    }
-  }, "Login"), isSuperAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+  }, profile.email), isSuperAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     onClick: openManageUsers,
     style: {
       background: "none",
@@ -1753,94 +1755,7 @@ function Dashboard() {
       padding: "11px 18px",
       fontSize: 16
     }
-  }, "Cancel"))), authModalOpen && /*#__PURE__*/React.createElement(Modal, {
-    onClose: closeAuthModal,
-    narrow: true
-  }, /*#__PURE__*/React.createElement("h2", {
-    style: {
-      margin: "0 0 10px",
-      fontSize: 18,
-      fontWeight: 700
-    }
-  }, authMode === "login" ? "Log in" : "Create an account"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      color: "#8B948E",
-      fontSize: 15,
-      margin: "0 0 18px"
-    }
-  }, authMode === "login" ? "Log in to view PM dates, set schedules, or manage contracts." : "New accounts start with view + set-date access. An admin can promote you later."), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "grid",
-      gap: 12
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "email",
-    value: authEmail,
-    onChange: e => setAuthEmail(e.target.value),
-    placeholder: "Email",
-    style: inputStyle,
-    autoFocus: true
-  }), /*#__PURE__*/React.createElement("input", {
-    type: "password",
-    value: authPassword,
-    onChange: e => setAuthPassword(e.target.value),
-    onKeyDown: e => e.key === "Enter" && submitAuth(),
-    placeholder: "Password",
-    style: inputStyle
-  })), authError && /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: "#F2545B",
-      fontSize: 14,
-      marginTop: 10
-    }
-  }, authError), authNotice && /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: "#4ADE9C",
-      fontSize: 14,
-      marginTop: 10
-    }
-  }, authNotice), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 10,
-      marginTop: 18
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: submitAuth,
-    disabled: authBusy,
-    style: {
-      flex: 1,
-      background: "#4ADE9C",
-      color: "#0B0E0C",
-      border: "none",
-      borderRadius: 8,
-      padding: "11px 0",
-      fontWeight: 600,
-      fontSize: 16,
-      opacity: authBusy ? 0.7 : 1
-    }
-  }, authBusy ? "Please wait…" : authMode === "login" ? "Log in" : "Sign up"), /*#__PURE__*/React.createElement("button", {
-    onClick: closeAuthModal,
-    style: {
-      background: "transparent",
-      color: "#8B948E",
-      border: "1px solid #262B27",
-      borderRadius: 8,
-      padding: "11px 18px",
-      fontSize: 16
-    }
-  }, "Cancel")), /*#__PURE__*/React.createElement("button", {
-    onClick: toggleAuthMode,
-    style: {
-      background: "none",
-      border: "none",
-      color: "#6E9FB0",
-      fontSize: 14,
-      marginTop: 16,
-      padding: 0,
-      textDecoration: "underline"
-    }
-  }, authMode === "login" ? "Don't have an account? Sign up" : "Already have an account? Log in")), manageUsersOpen && /*#__PURE__*/React.createElement(Modal, {
+  }, "Cancel"))), manageUsersOpen && /*#__PURE__*/React.createElement(Modal, {
     onClose: () => setManageUsersOpen(false)
   }, /*#__PURE__*/React.createElement("h2", {
     style: {
@@ -1854,7 +1769,7 @@ function Dashboard() {
       fontSize: 15,
       margin: "0 0 18px"
     }
-  }, "Assign roles. Only you (the super admin) can change anyone's role."), profilesError && /*#__PURE__*/React.createElement("div", {
+  }, "Assign PM Tracker roles. Guest = view only, User = can set PM dates, Admin = can manage contracts. Adhoc / Token roles are set in that app."), profilesError && /*#__PURE__*/React.createElement("div", {
     style: {
       color: "#F2545B",
       fontSize: 14,
@@ -1921,6 +1836,8 @@ function Dashboard() {
         flexShrink: 0
       }
     }, /*#__PURE__*/React.createElement("option", {
+      value: "guest"
+    }, "Guest"), /*#__PURE__*/React.createElement("option", {
       value: "user"
     }, "User"), /*#__PURE__*/React.createElement("option", {
       value: "admin"
