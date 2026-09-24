@@ -377,6 +377,14 @@ function Dashboard() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // tell the shell (index.html) whether the login screen is showing right now,
+  // so it can hide the dashboard switcher while logged out
+  useEffect(() => {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: "gvm-auth-state", loggedIn: authReady && !!session && !passwordRecovery }, "*");
+    }
+  }, [authReady, session, passwordRecovery]);
+
   // load app data once we have a session; clear it back out on logout
   useEffect(() => {
     if (!session) {
@@ -1103,8 +1111,8 @@ function Dashboard() {
     return (
       <div style={{ minHeight: "100vh", background: "#0B0E0C", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, color: "#E8ECE9", fontFamily: "'Space Grotesk', sans-serif" }}>
         <div style={{ width: "100%", maxWidth: 420, background: "#0E1210", border: "1px solid #1E2320", borderRadius: 14, padding: 28 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Adhoc / Token System</h1>
-          <div className="mono" style={{ fontSize: 10.5, letterSpacing: 1.5, color: "#8B948E", marginBottom: 22 }}>GLOBAL VISION MULTIMEDIA · A RICOH COMPANY</div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Global Vision Multimedia</h1>
+          <div className="mono" style={{ fontSize: 10.5, letterSpacing: 1.5, color: "#8B948E", marginBottom: 22 }}>A RICOH COMPANY</div>
 
           {authMode !== "forgot" && (
             <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>

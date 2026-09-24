@@ -695,6 +695,14 @@ function Dashboard() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // tell the shell (index.html) whether the login screen is showing right now,
+  // so it can hide the dashboard switcher while logged out
+  useEffect(() => {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: "gvm-auth-state", loggedIn: authReady && !!session }, "*");
+    }
+  }, [authReady, session]);
+
   // load my profile (for my PM role) whenever the logged-in user changes
   useEffect(() => {
     setProfile(null);
@@ -1129,7 +1137,7 @@ function Dashboard() {
       fontWeight: 600,
       margin: "0 0 4px"
     }
-  }, "PM Tracker"), /*#__PURE__*/React.createElement("div", {
+  }, "Global Vision Multimedia"), /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
       fontSize: 12,
@@ -1137,7 +1145,7 @@ function Dashboard() {
       color: "#8B948E",
       marginBottom: 20
     }
-  }, "GLOBAL VISION MULTIMEDIA"), /*#__PURE__*/React.createElement("div", {
+  }, "A RICOH COMPANY"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gap: 12
