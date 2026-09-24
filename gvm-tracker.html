@@ -386,7 +386,7 @@ async function fetchMyProfile(userId) {
   const {
     data,
     error
-  } = await sb.from("profiles").select("id,email,pm_role").eq("id", userId).maybeSingle();
+  } = await sb.from("profiles").select("id,email,first_name,last_name,pm_role").eq("id", userId).maybeSingle();
   if (error) throw new Error("Could not load profile");
   return withPmRole(data);
 }
@@ -433,6 +433,26 @@ async function logActivity(actorEmail, action, details) {
   } catch (e) {
     console.error("activity log failed", e);
   }
+}
+const PM_ROLE_COLOR = {
+  guest: "#8B948E",
+  user: "#6E9FB0",
+  admin: "#4ADE9C",
+  super_admin: "#F5A623"
+};
+const PM_ROLE_LABEL = {
+  guest: "Guest",
+  user: "User",
+  admin: "Admin",
+  super_admin: "Super Admin"
+};
+function initials(first, last) {
+  const a = (first || "").trim().charAt(0).toUpperCase();
+  const b = (last || "").trim().charAt(0).toUpperCase();
+  return a + b || "?";
+}
+function fullName(u) {
+  return u ? `${u.firstName} ${u.lastName}`.trim() : "";
 }
 const ACTIVITY_LABELS = {
   login: "Logged in",
@@ -680,6 +700,7 @@ function Dashboard() {
   const [filterYear, setFilterYear] = useState("");
   const [filterMonth, setFilterMonth] = useState("");
   const [onlineUsers, setOnlineUsers] = useState([]);
+  const [presenceTapped, setPresenceTapped] = useState(null);
   const lastSyncedRef = useRef("");
   const userId = session ? session.user.id : null;
 
@@ -779,7 +800,10 @@ function Dashboard() {
     const beat = async () => {
       try {
         await kvSet(`presence:${profile.id}`, {
-          email: profile.email
+          email: profile.email,
+          firstName: profile.first_name || "",
+          lastName: profile.last_name || "",
+          role: profile.role
         });
       } catch (e) {/* ignore transient heartbeat errors */}
     };
@@ -806,7 +830,10 @@ function Dashboard() {
         const now = Date.now();
         const online = rows.filter(r => now - new Date(r.updated_at).getTime() < PRESENCE_STALE_MS).map(r => ({
           id: r.key.slice("presence:".length),
-          email: r.value && r.value.email
+          email: r.value && r.value.email,
+          firstName: r.value && r.value.firstName,
+          lastName: r.value && r.value.lastName,
+          role: r.value && r.value.role
         })).filter(u => u.email);
         setOnlineUsers(online);
       } catch (e) {/* ignore transient poll errors */}
@@ -1125,25 +1152,25 @@ function Dashboard() {
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       width: "100%",
-      maxWidth: 380,
+      maxWidth: 420,
       background: "#0E1210",
       border: "1px solid #1E2320",
-      borderRadius: 12,
+      borderRadius: 14,
       padding: 28
     }
   }, /*#__PURE__*/React.createElement("h1", {
     style: {
       fontSize: 22,
-      fontWeight: 600,
+      fontWeight: 700,
       margin: "0 0 4px"
     }
   }, "Global Vision Multimedia"), /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 12,
-      letterSpacing: 2,
+      fontSize: 10.5,
+      letterSpacing: 1.5,
       color: "#8B948E",
-      marginBottom: 20
+      marginBottom: 22
     }
   }, "A RICOH COMPANY"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1253,29 +1280,37 @@ function Dashboard() {
   }, "A RICOH COMPANY")), onlineUsers.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
-      alignItems: "center",
-      gap: 6,
-      flexWrap: "wrap"
+      alignItems: "center"
     }
-  }, onlineUsers.map(u => /*#__PURE__*/React.createElement("div", {
+  }, onlineUsers.map((u, i) => /*#__PURE__*/React.createElement("div", {
     key: u.id,
-    title: `${u.email} · online`,
-    className: "mono jack-glow",
+    onClick: () => setPresenceTapped(t => t === u.id ? null : u.id),
+    title: `${fullName(u)} · ${PM_ROLE_LABEL[u.role] || "Guest"}`,
+    className: "mono",
     style: {
       width: 28,
       height: 28,
       borderRadius: "50%",
-      background: "#12251C",
-      border: "1px solid #4ADE9C",
-      color: "#4ADE9C",
+      marginLeft: i === 0 ? 0 : -8,
+      background: "#0E1210",
+      border: `2px solid ${PM_ROLE_COLOR[u.role] || "#8B948E"}`,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      fontSize: 13,
+      fontSize: 10.5,
       fontWeight: 700,
-      flexShrink: 0
+      color: PM_ROLE_COLOR[u.role] || "#8B948E",
+      cursor: "pointer",
+      position: "relative",
+      zIndex: onlineUsers.length - i
     }
-  }, u.email[0].toUpperCase()))), /*#__PURE__*/React.createElement("div", {
+  }, initials(u.firstName, u.lastName)))), presenceTapped && onlineUsers.find(u => u.id === presenceTapped) && /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      color: "#8B948E"
+    }
+  }, `${fullName(onlineUsers.find(u => u.id === presenceTapped))} · ${PM_ROLE_LABEL[onlineUsers.find(u => u.id === presenceTapped).role] || "Guest"}`), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
