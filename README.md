@@ -5,8 +5,8 @@ toggle. Both dashboards use the same Supabase project (`jkwakavosclpnbtyyltx`),
 so one login works for both: logging in or out in either one applies to both.
 
 - `index.html` — the shell/switcher. Deploy this whole folder as-is.
-- `gvm-tracker.html` — GVM PM Tracker (default dashboard on load).
-- `adhoc-token.html` — Adhoc / Token System.
+- `adhoc-token.html` — Adhoc / Token System (default dashboard on load).
+- `gvm-tracker.html` — GVM PM Tracker.
 
 ## Accounts and roles
 
@@ -38,6 +38,11 @@ references them by relative filename.
 
 ## Notes
 
-- Always opens on the PM Tracker; the last-viewed dashboard is not remembered.
+- Always opens on Adhoc / Token; the last-viewed dashboard is not remembered.
+- The top-right toggle (Adhoc / Token, then PM Tracker) is hidden on the login
+  screen — each dashboard tells the shell whether someone is logged in, and it
+  only shows the toggle once one of them says yes. Since the login is shared,
+  the branding on that screen ("Global Vision Multimedia" / "A RICOH COMPANY")
+  is common to both dashboards rather than naming either app.
 - Editing either dashboard: edit `gvm-tracker.html` or `adhoc-token.html` directly.
 - Editing the toggle/shell: edit `index.html`.

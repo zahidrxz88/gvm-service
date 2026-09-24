@@ -31,11 +31,14 @@
     top: env(safe-area-inset-top, 0px);
     right: 0;
     z-index: 10000;
-    display: flex;
+    display: none; /* hidden until we know the viewer is logged in (see #switcher-bar.visible) */
     align-items: center;
     gap: 8px;
     padding: 10px 14px;
     pointer-events: none; /* only the pill itself is interactive */
+  }
+  #switcher-bar.visible {
+    display: flex;
   }
   #switcher-pill {
     pointer-events: auto;
@@ -97,23 +100,23 @@
 
 <div id="switcher-bar">
   <div id="switcher-pill">
-    <button class="switch-btn" id="btn-gvm" onclick="showApp('gvm')">PM Tracker</button>
     <button class="switch-btn" id="btn-adhoc" onclick="showApp('adhoc')">Adhoc / Token</button>
+    <button class="switch-btn" id="btn-gvm" onclick="showApp('gvm')">PM Tracker</button>
   </div>
 </div>
 
-<div class="frame-wrap" id="wrap-gvm">
-  <iframe id="frame-gvm" src="gvm-tracker.html" title="GVM PM Tracker"></iframe>
+<div class="frame-wrap" id="wrap-adhoc">
+  <iframe id="frame-adhoc" src="adhoc-token.html" title="Adhoc / Token System"></iframe>
 </div>
 
-<div class="frame-wrap hidden" id="wrap-adhoc">
+<div class="frame-wrap hidden" id="wrap-gvm">
   <!-- lazy-loaded: src is only set the first time this dashboard is opened -->
-  <iframe id="frame-adhoc" data-src="adhoc-token.html" title="Adhoc / Token System"></iframe>
+  <iframe id="frame-gvm" data-src="gvm-tracker.html" title="GVM PM Tracker"></iframe>
 </div>
 
 <script>
-  // Always starts on the GVM PM Tracker, every load. No preference is remembered
-  // on purpose, per the "always default to PM Tracker on startup" requirement.
+  // Always starts on Adhoc / Token, every load. No preference is remembered
+  // on purpose, per the "always default to Adhoc / Token on startup" requirement.
   function showApp(name) {
     var wraps = { gvm: document.getElementById('wrap-gvm'), adhoc: document.getElementById('wrap-adhoc') };
     var btns  = { gvm: document.getElementById('btn-gvm'),  adhoc: document.getElementById('btn-adhoc')  };
@@ -123,15 +126,24 @@
       btns[key].classList.toggle('active', key === name);
     });
 
-    // Lazy-load the adhoc dashboard's iframe only the first time it's opened,
-    // so first paint of the default (PM Tracker) dashboard isn't slowed down.
-    var adhocFrame = document.getElementById('frame-adhoc');
-    if (name === 'adhoc' && !adhocFrame.getAttribute('src')) {
-      adhocFrame.setAttribute('src', adhocFrame.getAttribute('data-src'));
+    // Lazy-load the GVM PM Tracker iframe only the first time it's opened,
+    // so first paint of the default (Adhoc / Token) dashboard isn't slowed down.
+    var gvmFrame = document.getElementById('frame-gvm');
+    if (name === 'gvm' && !gvmFrame.getAttribute('src')) {
+      gvmFrame.setAttribute('src', gvmFrame.getAttribute('data-src'));
     }
   }
 
-  showApp('gvm');
+  showApp('adhoc');
+
+  // Both dashboards share one Supabase login, and each posts its own login
+  // state up to this shell. Hide the switcher entirely until whichever
+  // dashboard is currently active reports someone is actually logged in,
+  // so the toggle never shows on top of a login screen.
+  window.addEventListener('message', function(e) {
+    if (!e.data || e.data.type !== 'gvm-auth-state') return;
+    document.getElementById('switcher-bar').classList.toggle('visible', !!e.data.loggedIn);
+  });
 </script>
 
 </body>
