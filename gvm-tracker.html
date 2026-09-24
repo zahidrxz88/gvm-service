@@ -1835,6 +1835,10 @@ function Dashboard() {
     }
   }, "Loading…"), profiles.map(p => {
     const locked = p.role === "super_admin";
+    const pName = fullName({
+      firstName: p.first_name,
+      lastName: p.last_name
+    });
     return /*#__PURE__*/React.createElement("div", {
       key: p.id,
       style: {
@@ -1850,9 +1854,18 @@ function Dashboard() {
       style: {
         minWidth: 0
       }
-    }, /*#__PURE__*/React.createElement("div", {
+    }, pName && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 14.5,
+        fontWeight: 700,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+      }
+    }, pName), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: pName ? 12.5 : 14.5,
+        color: pName ? "#8B948E" : undefined,
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap"
