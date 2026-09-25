@@ -61,6 +61,7 @@ const KV_RATE_CARD = "adhoc_token_rate_card";
 const KV_CLIENTS = "adhoc_token_clients";
 const KV_PRESENCE = "adhoc_token_presence";
 const KV_ACTIVITY = "adhoc_token_activity";
+const KV_ENGINEERS = "adhoc_token_engineers";
 
 // ============ tiny icon set ============
 function Icon({ size = 16, color = "currentColor", children }) {
@@ -186,7 +187,8 @@ const emptyForm = {
   tokenCount: "",
   requestDate: todayStr(),
   startTime: "",
-  endTime: ""
+  endTime: "",
+  engineers: []
 };
 const emptyRateForm = { client: "", region: "", city: "", hourRateWeekdayBiz: "", hourRateWeekdayAfter: "", hourRateWeekend: "" };
 const emptyRateInputs = { hourRateWeekdayBiz: "", hourRateWeekdayAfter: "", hourRateWeekend: "" };
@@ -324,6 +326,9 @@ function Dashboard() {
   const [topUpRequestId, setTopUpRequestId] = useState("");
   const [topUpAmount, setTopUpAmount] = useState("");
   const [topUpError, setTopUpError] = useState("");
+  const [engineersByRegion, setEngineersByRegion] = useState({});
+  const [addingEngineer, setAddingEngineer] = useState(false);
+  const [newEngineerName, setNewEngineerName] = useState("");
 
   // ---- auth (real Supabase Auth) / users / presence / activity ----
   const [session, setSession] = useState(null);
@@ -362,6 +367,7 @@ function Dashboard() {
   const lastUsersSyncedRef = useRef("");
   const lastActivitySyncedRef = useRef("");
   const lastPresenceSyncedRef = useRef("");
+  const lastEngineersSyncedRef = useRef("");
   const loggedInOnceRef = useRef(false);
 
   // establish and track the Supabase Auth session
@@ -424,6 +430,10 @@ function Dashboard() {
         const remotePresence = await kvGet(KV_PRESENCE);
         if (remotePresence) { setPresence(remotePresence); lastPresenceSyncedRef.current = JSON.stringify(remotePresence); }
       } catch (e) { console.error("load presence failed", e); }
+      try {
+        const remoteEngineers = await kvGet(KV_ENGINEERS);
+        if (remoteEngineers) { setEngineersByRegion(remoteEngineers); lastEngineersSyncedRef.current = JSON.stringify(remoteEngineers); }
+      } catch (e) { console.error("load engineers failed", e); }
       setLoaded(true);
       if (!loggedInOnceRef.current) {
         loggedInOnceRef.current = true;
@@ -476,6 +486,17 @@ function Dashboard() {
       } catch (e) { console.error("save activity failed", e); }
     })();
   }, [activity, loaded]);
+
+  // save engineers by region
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        await kvSet(KV_ENGINEERS, engineersByRegion);
+        lastEngineersSyncedRef.current = JSON.stringify(engineersByRegion);
+      } catch (e) { console.error("save engineers failed", e); }
+    })();
+  }, [engineersByRegion, loaded]);
 
   // apply any token job-request deductions whose Request Date has fully passed onto the
   // matching client+city Active Tokens account. Re-runs whenever requests/rateCard change
@@ -571,6 +592,14 @@ function Dashboard() {
         if (remotePresenceJson && remotePresenceJson !== lastPresenceSyncedRef.current) {
           lastPresenceSyncedRef.current = remotePresenceJson;
           setPresence(remotePresence);
+        }
+      } catch (e) {}
+      try {
+        const remoteEngineers = await kvGet(KV_ENGINEERS);
+        const remoteEngineersJson = remoteEngineers ? JSON.stringify(remoteEngineers) : "";
+        if (remoteEngineersJson && remoteEngineersJson !== lastEngineersSyncedRef.current) {
+          lastEngineersSyncedRef.current = remoteEngineersJson;
+          setEngineersByRegion(remoteEngineers);
         }
       } catch (e) {}
     }, 10000);
@@ -684,6 +713,8 @@ function Dashboard() {
     setIncludeRateInputs(false);
     setRateInputs(emptyRateInputs);
     setRateInputErrors({});
+    setAddingEngineer(false);
+    setNewEngineerName("");
     setModalOpen(true);
   };
   const openEdit = r => {
@@ -702,11 +733,14 @@ function Dashboard() {
       tokenCount: String(r.tokenCount ?? ""),
       requestDate: r.requestDate,
       startTime: r.startTime || "",
-      endTime: r.endTime || ""
+      endTime: r.endTime || "",
+      engineers: r.engineers || []
     });
     setEditingId(r.id);
     setFieldErrors({});
     setFormSaveError("");
+    setAddingEngineer(false);
+    setNewEngineerName("");
     setModalOpen(true);
   };
   const saveForm = async () => {
@@ -814,6 +848,24 @@ function Dashboard() {
     } finally {
       setSaving(false);
     }
+  };
+  const toggleEngineer = name => {
+    setForm(f => {
+      const list = f.engineers || [];
+      return { ...f, engineers: list.includes(name) ? list.filter(n => n !== name) : [...list, name] };
+    });
+  };
+  const confirmAddEngineer = () => {
+    const name = newEngineerName.trim();
+    if (!name || !form.region) return;
+    setEngineersByRegion(prev => {
+      const list = prev[form.region] || [];
+      if (list.some(n => n.toLowerCase() === name.toLowerCase())) return prev;
+      return { ...prev, [form.region]: [...list, name].sort((a, b) => a.localeCompare(b)) };
+    });
+    setForm(f => (f.engineers || []).includes(name) ? f : { ...f, engineers: [...(f.engineers || []), name] });
+    setNewEngineerName("");
+    setAddingEngineer(false);
   };
   const deleteRequest = async id => {
     if (!isAdmin) return;
@@ -942,6 +994,8 @@ function Dashboard() {
     setIncludeRateInputs(true);
     setRateInputs(emptyRateInputs);
     setRateInputErrors({});
+    setAddingEngineer(false);
+    setNewEngineerName("");
     setModalOpen(true);
   };
   const submitTopUp = async () => {
@@ -1047,7 +1101,7 @@ function Dashboard() {
 
   const exportRequestsCsv = () => {
     if (!isAdmin) return;
-    const header = ["Reference No", "Client", "City", "Address", "Region", "Type", "Rate Tier", "Balance ($)", "Deducted ($)", "Rate ($)", "Est. Cost ($)", "Request Date", "Start Time", "End Time", "Description"];
+    const header = ["Reference No", "Client", "City", "Address", "Region", "Type", "Rate Tier", "Balance ($)", "Deducted ($)", "Rate ($)", "Est. Cost ($)", "Request Date", "Start Time", "End Time", "Engineer(s)", "Description"];
     const rows = enriched.map(r => {
       const isTok = r.type === "token";
       const isAcct = isTokenAccount(r);
@@ -1065,6 +1119,7 @@ function Dashboard() {
         r.requestDate,
         r.startTime || "",
         r.endTime || "",
+        (r.engineers || []).join("; "),
         r.scope || ""
       ];
     });
@@ -1781,6 +1836,48 @@ function Dashboard() {
                 </div>
               </div>
             )}
+            {!includeRateInputs && !editingAccount && (
+              <Field label="Engineer">
+                {!form.region.trim() ? (
+                  <div className="mono" style={{ fontSize: 10.5, color: "#8B948E" }}>
+                    Select a region above to assign engineers.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {(engineersByRegion[form.region] || []).map(name => {
+                      const selected = (form.engineers || []).includes(name);
+                      return (
+                        <button key={name} type="button" className="type-btn" onClick={() => toggleEngineer(name)}
+                          style={{
+                            padding: "8px 12px", borderRadius: 7, fontWeight: 600, fontSize: 12.5,
+                            border: selected ? "1px solid #4ADE9C" : "1px solid #262B27",
+                            background: selected ? "#4ADE9C22" : "transparent",
+                            color: selected ? "#4ADE9C" : "#8B948E"
+                          }}>{name}</button>
+                      );
+                    })}
+                    {addingEngineer ? (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <TextInput value={newEngineerName} onChange={setNewEngineerName} placeholder="ENGINEER NAME" uppercase />
+                        <button type="button" onClick={confirmAddEngineer}
+                          style={{ background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 7, padding: "8px 12px", fontWeight: 600, fontSize: 12.5, flexShrink: 0 }}>
+                          Add
+                        </button>
+                        <button type="button" onClick={() => { setAddingEngineer(false); setNewEngineerName(""); }}
+                          style={{ background: "transparent", color: "#8B948E", border: "1px solid #262B27", borderRadius: 7, padding: "8px 10px", fontSize: 12.5, flexShrink: 0 }}>
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={() => setAddingEngineer(true)}
+                        style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", color: "#6E9FB0", border: "1px dashed #6E9FB055", borderRadius: 7, padding: "8px 12px", fontWeight: 600, fontSize: 12.5 }}>
+                        <Plus size={13} /> Add Engineer
+                      </button>
+                    )}
+                  </div>
+                )}
+              </Field>
+            )}
             {!includeRateInputs && !editingAccount && form.type === "token" && (() => {
               const tier = deriveHourTier(form.requestDate, form.startTime);
               const hours = hoursBetween(form.startTime, form.endTime);
@@ -1923,6 +2020,12 @@ function RequestCard({ r, isAdmin, onEdit, onDelete }) {
           <div>
             <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>TIME</div>
             <div className="mono">{r.startTime || "?"} – {r.endTime || "?"}</div>
+          </div>
+        )}
+        {r.engineers && r.engineers.length > 0 && (
+          <div>
+            <div className="mono" style={{ color: "#8B948E", fontSize: 10 }}>ENGINEER</div>
+            <div className="mono">{r.engineers.join(", ")}</div>
           </div>
         )}
         {isAccount && (
