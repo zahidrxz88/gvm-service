@@ -374,6 +374,9 @@ async function kvList(keyPrefix) {
   if (error) throw error;
   return data || [];
 }
+// same key the Adhoc / Token app writes to (shared Supabase project) -- one engineer
+// directory per country, usable from either dashboard
+const KV_ENGINEERS = "adhoc_token_engineers";
 
 // ---------- profiles / activity_log ----------
 // profiles.role is the Adhoc / Token role; this app's role lives in profiles.pm_role.
@@ -463,6 +466,8 @@ const ACTIVITY_LABELS = {
   pm_date_set: "Set PM check date",
   pm_check_done: "Marked PM check done",
   pm_check_undone: "Unmarked PM check",
+  engineer_assigned: "Assigned an engineer",
+  engineer_removed: "Removed an engineer",
   role_change: "Changed a user's role"
 };
 
@@ -701,6 +706,10 @@ function Dashboard() {
   const [filterMonth, setFilterMonth] = useState("");
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [presenceTapped, setPresenceTapped] = useState(null);
+  const [engineersByRegion, setEngineersByRegion] = useState({});
+  const [addingEngineerFor, setAddingEngineerFor] = useState(null);
+  const [newEngineerName, setNewEngineerName] = useState("");
+  const lastEngineersSyncedRef = useRef("");
   const lastSyncedRef = useRef("");
   const userId = session ? session.user.id : null;
 
@@ -792,6 +801,58 @@ function Dashboard() {
     }, 10000);
     return () => clearInterval(interval);
   }, [loaded]);
+
+  // load the engineers-by-country directory once logged in (shared with Adhoc / Token)
+  useEffect(() => {
+    setEngineersByRegion({});
+    lastEngineersSyncedRef.current = "";
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const remote = await kvGet(KV_ENGINEERS);
+        if (cancelled || !remote) return;
+        setEngineersByRegion(remote);
+        lastEngineersSyncedRef.current = JSON.stringify(remote);
+      } catch (e) {
+        console.error("load engineers failed", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  // save the engineers-by-country directory (only real local changes, and only for roles allowed to write)
+  useEffect(() => {
+    if (!userId || !isUser) return;
+    const json = JSON.stringify(engineersByRegion);
+    if (json === lastEngineersSyncedRef.current) return;
+    (async () => {
+      try {
+        await kvSet(KV_ENGINEERS, engineersByRegion);
+        lastEngineersSyncedRef.current = json;
+      } catch (e) {
+        console.error("save engineers failed", e);
+      }
+    })();
+  }, [engineersByRegion, userId, isUser]);
+
+  // poll for engineer directory updates (e.g. added from the Adhoc / Token app) every 10s
+  useEffect(() => {
+    if (!userId) return;
+    const interval = setInterval(async () => {
+      try {
+        const remote = await kvGet(KV_ENGINEERS);
+        const remoteJson = remote ? JSON.stringify(remote) : "";
+        if (remoteJson && remoteJson !== lastEngineersSyncedRef.current) {
+          lastEngineersSyncedRef.current = remoteJson;
+          setEngineersByRegion(remote);
+        }
+      } catch (e) {/* ignore transient poll errors */}
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [userId]);
 
   // send a "still here" heartbeat every 10s while logged in, so others see us as online
   useEffect(() => {
@@ -1028,6 +1089,52 @@ function Dashboard() {
       slotId,
       date: dateStr || null
     });
+  };
+  const toggleContractEngineer = (contractId, name) => {
+    if (!isUser) return;
+    const contract = contracts.find(c => c.id === contractId);
+    const assigned = contract && (contract.engineers || []).includes(name);
+    setContracts(cs => cs.map(c => {
+      if (c.id !== contractId) return c;
+      const list = c.engineers || [];
+      return {
+        ...c,
+        engineers: list.includes(name) ? list.filter(n => n !== name) : [...list, name]
+      };
+    }));
+    logActivity(profile.email, assigned ? "engineer_removed" : "engineer_assigned", {
+      contractId,
+      name
+    });
+  };
+  const confirmAddEngineer = contractId => {
+    if (!isUser) return;
+    const name = newEngineerName.trim();
+    const contract = contracts.find(c => c.id === contractId);
+    const region = contract && contract.region;
+    if (!name || !region) return;
+    setEngineersByRegion(prev => {
+      const list = prev[region] || [];
+      if (list.some(n => n.toLowerCase() === name.toLowerCase())) return prev;
+      return {
+        ...prev,
+        [region]: [...list, name].sort((a, b) => a.localeCompare(b))
+      };
+    });
+    setContracts(cs => cs.map(c => {
+      if (c.id !== contractId) return c;
+      const list = c.engineers || [];
+      return list.includes(name) ? c : {
+        ...c,
+        engineers: [...list, name]
+      };
+    }));
+    logActivity(profile.email, "engineer_assigned", {
+      contractId,
+      name
+    });
+    setNewEngineerName("");
+    setAddingEngineerFor(null);
   };
   const enriched = useMemo(() => contracts.map(c => {
     const schedule = (c.schedule || []).map(s => ({
@@ -1594,7 +1701,18 @@ function Dashboard() {
     isUser: isUser,
     onEdit: () => openEdit(c),
     onDelete: () => setConfirmDelete(c.id),
-    onSetDate: setSlotDate
+    onSetDate: setSlotDate,
+    engineersByRegion: engineersByRegion,
+    addingEngineerFor: addingEngineerFor,
+    newEngineerName: newEngineerName,
+    onToggleEngineer: toggleContractEngineer,
+    onStartAddEngineer: setAddingEngineerFor,
+    onNewEngineerNameChange: setNewEngineerName,
+    onConfirmAddEngineer: confirmAddEngineer,
+    onCancelAddEngineer: () => {
+      setAddingEngineerFor(null);
+      setNewEngineerName("");
+    }
   })))), expiredContracts.length > 0 && /*#__PURE__*/React.createElement("section", {
     style: {
       marginTop: 40
@@ -1615,7 +1733,18 @@ function Dashboard() {
     isUser: isUser,
     onEdit: () => openEdit(c),
     onDelete: () => setConfirmDelete(c.id),
-    onSetDate: setSlotDate
+    onSetDate: setSlotDate,
+    engineersByRegion: engineersByRegion,
+    addingEngineerFor: addingEngineerFor,
+    newEngineerName: newEngineerName,
+    onToggleEngineer: toggleContractEngineer,
+    onStartAddEngineer: setAddingEngineerFor,
+    onNewEngineerNameChange: setNewEngineerName,
+    onConfirmAddEngineer: confirmAddEngineer,
+    onCancelAddEngineer: () => {
+      setAddingEngineerFor(null);
+      setNewEngineerName("");
+    }
   }))))), modalOpen && /*#__PURE__*/React.createElement(Modal, {
     onClose: () => setModalOpen(false)
   }, /*#__PURE__*/React.createElement("h2", {
@@ -2087,7 +2216,15 @@ function ContractCard({
   isUser,
   onEdit,
   onDelete,
-  onSetDate
+  onSetDate,
+  engineersByRegion,
+  addingEngineerFor,
+  newEngineerName,
+  onToggleEngineer,
+  onStartAddEngineer,
+  onNewEngineerNameChange,
+  onConfirmAddEngineer,
+  onCancelAddEngineer
 }) {
   const expired = c.daysToExpiry < 0;
   const expiringSoon = !expired && c.daysToExpiry <= 60;
@@ -2229,6 +2366,15 @@ function ContractCard({
     }
   }, "PM SCHEDULE · ", c.completedCount, "/", c.schedule.length, " COMPLETE"), /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "flex",
+      gap: 16,
+      alignItems: "flex-start",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: "1 1 160px",
+      minWidth: 0,
       display: "grid",
       gap: 10
     }
@@ -2272,7 +2418,117 @@ function ContractCard({
       marginTop: 4,
       marginLeft: 18
     }
-  }, "Please select a date"))))));
+  }, "Please select a date")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: "0 0 auto",
+      minWidth: 120,
+      maxWidth: 150,
+      display: "grid",
+      gap: 6
+    }
+  }, (c.engineers || []).map(name => /*#__PURE__*/React.createElement("span", {
+    key: name,
+    className: "mono",
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 6,
+      fontSize: 11,
+      fontWeight: 600,
+      padding: "6px 8px",
+      borderRadius: 6,
+      border: "1px solid #4ADE9C55",
+      color: "#4ADE9C",
+      background: "#4ADE9C11"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, name), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onToggleEngineer(c.id, name),
+    title: "Remove engineer",
+    style: {
+      background: "none",
+      border: "none",
+      color: "#4ADE9C",
+      padding: 0,
+      display: "flex",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(XIcon, {
+    size: 11
+  })))), addingEngineerFor === c.id ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    autoFocus: true,
+    value: newEngineerName,
+    onChange: e => onNewEngineerNameChange(e.target.value.toUpperCase()),
+    onKeyDown: e => e.key === "Enter" && onConfirmAddEngineer(c.id),
+    placeholder: "ENGINEER NAME",
+    style: {
+      ...inputStyle,
+      padding: "6px 8px",
+      fontSize: 12,
+      textTransform: "uppercase"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onConfirmAddEngineer(c.id),
+    style: {
+      flex: 1,
+      background: "#4ADE9C",
+      color: "#0B0E0C",
+      border: "none",
+      borderRadius: 6,
+      padding: "6px 0",
+      fontWeight: 600,
+      fontSize: 11.5
+    }
+  }, "Add"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onCancelAddEngineer,
+    style: {
+      background: "transparent",
+      color: "#8B948E",
+      border: "1px solid #262B27",
+      borderRadius: 6,
+      padding: "6px 8px",
+      fontSize: 11.5
+    }
+  }, /*#__PURE__*/React.createElement(XIcon, {
+    size: 11
+  })))) : /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onStartAddEngineer(c.id),
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 5,
+      background: "transparent",
+      color: "#6E9FB0",
+      border: "1px dashed #6E9FB055",
+      borderRadius: 6,
+      padding: "7px 8px",
+      fontWeight: 600,
+      fontSize: 11.5
+    }
+  }, /*#__PURE__*/React.createElement(Plus, {
+    size: 12
+  }), "Add Engineer")))));
 }
 function IconBtn({
   children,
