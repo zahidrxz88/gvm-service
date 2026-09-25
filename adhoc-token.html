@@ -1050,7 +1050,8 @@ function Dashboard() {
       r.nextTwo.forEach(s => {
         if (s.date) items.push({
           requestId: r.id, slotId: s.id, refNo: r.refNo, client: r.client,
-          address: r.address, region: r.region, date: s.date, status: s.status
+          address: r.address, region: r.region, date: s.date, status: s.status,
+          engineers: r.engineers
         });
       });
     });
@@ -1363,6 +1364,11 @@ function Dashboard() {
                         {item.city && <span className="mono" style={{ color: "#4ADE9C" }}> · {item.city.toUpperCase()}</span>}
                         {item.region && <span className="mono" style={{ color: "#6E9FB0" }}> · {item.region.toUpperCase()}</span>}
                       </div>
+                      {item.engineers && item.engineers.length > 0 && (
+                        <div className="mono" style={{ fontSize: isNext ? 12 : 10.5, color: "#4ADE9C", marginTop: 6 }}>
+                          ENGINEER · {item.engineers.join(", ")}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1843,21 +1849,40 @@ function Dashboard() {
                     Select a region above to assign engineers.
                   </div>
                 ) : (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    {(engineersByRegion[form.region] || []).map(name => {
-                      const selected = (form.engineers || []).includes(name);
-                      return (
-                        <button key={name} type="button" className="type-btn" onClick={() => toggleEngineer(name)}
-                          style={{
-                            padding: "8px 12px", borderRadius: 7, fontWeight: 600, fontSize: 12.5,
-                            border: selected ? "1px solid #4ADE9C" : "1px solid #262B27",
-                            background: selected ? "#4ADE9C22" : "transparent",
-                            color: selected ? "#4ADE9C" : "#8B948E"
-                          }}>{name}</button>
-                      );
-                    })}
-                    {addingEngineer ? (
-                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {(form.engineers || []).length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {form.engineers.map(name => (
+                          <span key={name} className="mono" style={{
+                            display: "flex", alignItems: "center", gap: 6, padding: "7px 10px",
+                            borderRadius: 7, fontWeight: 600, fontSize: 12.5,
+                            border: "1px solid #4ADE9C55", background: "#4ADE9C22", color: "#4ADE9C"
+                          }}>
+                            {name}
+                            <button type="button" onClick={() => toggleEngineer(name)} title="Remove engineer"
+                              style={{ background: "none", border: "none", color: "#4ADE9C", padding: 0, display: "flex" }}>
+                              <XIcon size={12} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <select value={addingEngineer ? "__new__" : ""}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (!v) return;
+                        if (v === "__new__") setAddingEngineer(true);
+                        else toggleEngineer(v);
+                      }}
+                      style={selectStyle}>
+                      <option value="">+ Add engineer</option>
+                      {(engineersByRegion[form.region] || []).filter(n => !(form.engineers || []).includes(n)).map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                      <option value="__new__">+ New Engineer</option>
+                    </select>
+                    {addingEngineer && (
+                      <div style={{ display: "flex", gap: 6 }}>
                         <TextInput value={newEngineerName} onChange={setNewEngineerName} placeholder="ENGINEER NAME" uppercase />
                         <button type="button" onClick={confirmAddEngineer}
                           style={{ background: "#4ADE9C", color: "#0B0E0C", border: "none", borderRadius: 7, padding: "8px 12px", fontWeight: 600, fontSize: 12.5, flexShrink: 0 }}>
@@ -1868,11 +1893,6 @@ function Dashboard() {
                           ✕
                         </button>
                       </div>
-                    ) : (
-                      <button type="button" onClick={() => setAddingEngineer(true)}
-                        style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", color: "#6E9FB0", border: "1px dashed #6E9FB055", borderRadius: 7, padding: "8px 12px", fontWeight: 600, fontSize: 12.5 }}>
-                        <Plus size={13} /> Add Engineer
-                      </button>
                     )}
                   </div>
                 )}

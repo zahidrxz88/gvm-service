@@ -2462,7 +2462,26 @@ function ContractCard({
     }
   }, /*#__PURE__*/React.createElement(XIcon, {
     size: 11
-  })))), addingEngineerFor === c.id ? /*#__PURE__*/React.createElement("div", {
+  })))), /*#__PURE__*/React.createElement("select", {
+    value: "",
+    onChange: e => {
+      const v = e.target.value;
+      if (!v) return;
+      if (v === "__new__") onStartAddEngineer(c.id);else onToggleEngineer(c.id, v);
+    },
+    style: {
+      ...selectStyle,
+      padding: "6px 8px",
+      fontSize: 11.5
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "+ Add engineer"), (engineersByRegion[c.region] || []).filter(n => !(c.engineers || []).includes(n)).map(name => /*#__PURE__*/React.createElement("option", {
+    key: name,
+    value: name
+  }, name)), /*#__PURE__*/React.createElement("option", {
+    value: "__new__"
+  }, "+ New Engineer")), addingEngineerFor === c.id && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gap: 6
@@ -2510,25 +2529,7 @@ function ContractCard({
     }
   }, /*#__PURE__*/React.createElement(XIcon, {
     size: 11
-  })))) : /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: () => onStartAddEngineer(c.id),
-    style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 5,
-      background: "transparent",
-      color: "#6E9FB0",
-      border: "1px dashed #6E9FB055",
-      borderRadius: 6,
-      padding: "7px 8px",
-      fontWeight: 600,
-      fontSize: 11.5
-    }
-  }, /*#__PURE__*/React.createElement(Plus, {
-    size: 12
-  }), "Add Engineer")))));
+  }))))))));
 }
 function IconBtn({
   children,
