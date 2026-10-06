@@ -614,7 +614,8 @@ function buildSlots(contract, existing = []) {
     out.push(existing[i] ? existing[i] : {
       id: uid(),
       date: null,
-      completed: false
+      completed: false,
+      engineers: []
     });
   }
   return out;
@@ -707,7 +708,8 @@ function Dashboard() {
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [presenceTapped, setPresenceTapped] = useState(null);
   const [engineersByRegion, setEngineersByRegion] = useState({});
-  const [addingEngineerFor, setAddingEngineerFor] = useState(null);
+  const [addingEngineerForSlot, setAddingEngineerForSlot] = useState(null);
+  const [expandedEngineerSlot, setExpandedEngineerSlot] = useState(null);
   const [newEngineerName, setNewEngineerName] = useState("");
   const lastEngineersSyncedRef = useRef("");
   const lastSyncedRef = useRef("");
@@ -1090,24 +1092,32 @@ function Dashboard() {
       date: dateStr || null
     });
   };
-  const toggleContractEngineer = (contractId, name) => {
+  const toggleSlotEngineer = (contractId, slotId, name) => {
     if (!isUser) return;
     const contract = contracts.find(c => c.id === contractId);
-    const assigned = contract && (contract.engineers || []).includes(name);
+    const slot = contract && contract.schedule.find(s => s.id === slotId);
+    const assigned = slot && (slot.engineers || []).includes(name);
     setContracts(cs => cs.map(c => {
       if (c.id !== contractId) return c;
-      const list = c.engineers || [];
       return {
         ...c,
-        engineers: list.includes(name) ? list.filter(n => n !== name) : [...list, name]
+        schedule: c.schedule.map(s => {
+          if (s.id !== slotId) return s;
+          const list = s.engineers || [];
+          return {
+            ...s,
+            engineers: list.includes(name) ? list.filter(n => n !== name) : [...list, name]
+          };
+        })
       };
     }));
     logActivity(profile.email, assigned ? "engineer_removed" : "engineer_assigned", {
       contractId,
+      slotId,
       name
     });
   };
-  const confirmAddEngineer = contractId => {
+  const confirmAddEngineer = (contractId, slotId) => {
     if (!isUser) return;
     const name = newEngineerName.trim();
     const contract = contracts.find(c => c.id === contractId);
@@ -1123,18 +1133,25 @@ function Dashboard() {
     });
     setContracts(cs => cs.map(c => {
       if (c.id !== contractId) return c;
-      const list = c.engineers || [];
-      return list.includes(name) ? c : {
+      return {
         ...c,
-        engineers: [...list, name]
+        schedule: c.schedule.map(s => {
+          if (s.id !== slotId) return s;
+          const list = s.engineers || [];
+          return list.includes(name) ? s : {
+            ...s,
+            engineers: [...list, name]
+          };
+        })
       };
     }));
     logActivity(profile.email, "engineer_assigned", {
       contractId,
+      slotId,
       name
     });
     setNewEngineerName("");
-    setAddingEngineerFor(null);
+    setAddingEngineerForSlot(null);
   };
   const enriched = useMemo(() => contracts.map(c => {
     const schedule = (c.schedule || []).map(s => ({
@@ -1703,16 +1720,18 @@ function Dashboard() {
     onDelete: () => setConfirmDelete(c.id),
     onSetDate: setSlotDate,
     engineersByRegion: engineersByRegion,
-    addingEngineerFor: addingEngineerFor,
+    addingEngineerForSlot: addingEngineerForSlot,
+    expandedEngineerSlot: expandedEngineerSlot,
     newEngineerName: newEngineerName,
-    onToggleEngineer: toggleContractEngineer,
-    onStartAddEngineer: setAddingEngineerFor,
+    onToggleEngineer: toggleSlotEngineer,
+    onStartAddEngineer: setAddingEngineerForSlot,
     onNewEngineerNameChange: setNewEngineerName,
     onConfirmAddEngineer: confirmAddEngineer,
     onCancelAddEngineer: () => {
-      setAddingEngineerFor(null);
+      setAddingEngineerForSlot(null);
       setNewEngineerName("");
-    }
+    },
+    onToggleExpandSlot: setExpandedEngineerSlot
   })))), expiredContracts.length > 0 && /*#__PURE__*/React.createElement("section", {
     style: {
       marginTop: 40
@@ -1735,16 +1754,18 @@ function Dashboard() {
     onDelete: () => setConfirmDelete(c.id),
     onSetDate: setSlotDate,
     engineersByRegion: engineersByRegion,
-    addingEngineerFor: addingEngineerFor,
+    addingEngineerForSlot: addingEngineerForSlot,
+    expandedEngineerSlot: expandedEngineerSlot,
     newEngineerName: newEngineerName,
-    onToggleEngineer: toggleContractEngineer,
-    onStartAddEngineer: setAddingEngineerFor,
+    onToggleEngineer: toggleSlotEngineer,
+    onStartAddEngineer: setAddingEngineerForSlot,
     onNewEngineerNameChange: setNewEngineerName,
     onConfirmAddEngineer: confirmAddEngineer,
     onCancelAddEngineer: () => {
-      setAddingEngineerFor(null);
+      setAddingEngineerForSlot(null);
       setNewEngineerName("");
-    }
+    },
+    onToggleExpandSlot: setExpandedEngineerSlot
   }))))), modalOpen && /*#__PURE__*/React.createElement(Modal, {
     onClose: () => setModalOpen(false)
   }, /*#__PURE__*/React.createElement("h2", {
@@ -2218,13 +2239,15 @@ function ContractCard({
   onDelete,
   onSetDate,
   engineersByRegion,
-  addingEngineerFor,
+  addingEngineerForSlot,
+  expandedEngineerSlot,
   newEngineerName,
   onToggleEngineer,
   onStartAddEngineer,
   onNewEngineerNameChange,
   onConfirmAddEngineer,
-  onCancelAddEngineer
+  onCancelAddEngineer,
+  onToggleExpandSlot
 }) {
   const expired = c.daysToExpiry < 0;
   const expiringSoon = !expired && c.daysToExpiry <= 60;
@@ -2366,6 +2389,12 @@ function ContractCard({
     }
   }, "PM SCHEDULE · ", c.completedCount, "/", c.schedule.length, " COMPLETE"), /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "grid",
+      gap: 14
+    }
+  }, c.schedule.map((s, i) => /*#__PURE__*/React.createElement("div", {
+    key: s.id,
+    style: {
       display: "flex",
       gap: 16,
       alignItems: "flex-start",
@@ -2374,12 +2403,8 @@ function ContractCard({
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       flex: "1 1 160px",
-      minWidth: 0,
-      display: "grid",
-      gap: 10
+      minWidth: 0
     }
-  }, c.schedule.map((s, i) => /*#__PURE__*/React.createElement("div", {
-    key: s.id
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -2418,15 +2443,80 @@ function ContractCard({
       marginTop: 4,
       marginLeft: 18
     }
-  }, "Please select a date")))), /*#__PURE__*/React.createElement("div", {
+  }, "Please select a date")), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: "0 0 auto",
       minWidth: 120,
-      maxWidth: 150,
+      maxWidth: 150
+    }
+  }, /*#__PURE__*/React.createElement(SlotEngineerPanel, {
+    contractId: c.id,
+    slot: s,
+    region: c.region,
+    engineersByRegion: engineersByRegion,
+    addingEngineerForSlot: addingEngineerForSlot,
+    expandedEngineerSlot: expandedEngineerSlot,
+    newEngineerName: newEngineerName,
+    onToggleEngineer: onToggleEngineer,
+    onStartAddEngineer: onStartAddEngineer,
+    onNewEngineerNameChange: onNewEngineerNameChange,
+    onConfirmAddEngineer: onConfirmAddEngineer,
+    onCancelAddEngineer: onCancelAddEngineer,
+    onToggleExpandSlot: onToggleExpandSlot
+  })))))));
+}
+function SlotEngineerPanel({
+  contractId,
+  slot,
+  region,
+  engineersByRegion,
+  addingEngineerForSlot,
+  expandedEngineerSlot,
+  newEngineerName,
+  onToggleEngineer,
+  onStartAddEngineer,
+  onNewEngineerNameChange,
+  onConfirmAddEngineer,
+  onCancelAddEngineer,
+  onToggleExpandSlot
+}) {
+  const engineers = slot.engineers || [];
+  const hasEngineers = engineers.length > 0;
+  const expanded = expandedEngineerSlot === slot.id;
+  const adding = addingEngineerForSlot === slot.id;
+  if (hasEngineers && !expanded) {
+    return /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => onToggleExpandSlot(slot.id),
+      style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 5,
+        background: "transparent",
+        color: "#6E9FB0",
+        border: "1px solid #6E9FB055",
+        borderRadius: 6,
+        padding: "7px 8px",
+        fontWeight: 600,
+        fontSize: 11.5,
+        width: "100%"
+      }
+    }, /*#__PURE__*/React.createElement(Pencil, {
+      size: 11
+    }), "Edit engineer");
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
       display: "grid",
       gap: 6
     }
-  }, (c.engineers || []).map(name => /*#__PURE__*/React.createElement("span", {
+  }, engineers.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gap: 6
+    }
+  }, engineers.map(name => /*#__PURE__*/React.createElement("span", {
     key: name,
     className: "mono",
     style: {
@@ -2450,7 +2540,7 @@ function ContractCard({
     }
   }, name), /*#__PURE__*/React.createElement("button", {
     type: "button",
-    onClick: () => onToggleEngineer(c.id, name),
+    onClick: () => onToggleEngineer(contractId, slot.id, name),
     title: "Remove engineer",
     style: {
       background: "none",
@@ -2462,12 +2552,12 @@ function ContractCard({
     }
   }, /*#__PURE__*/React.createElement(XIcon, {
     size: 11
-  })))), /*#__PURE__*/React.createElement("select", {
+  }))))), /*#__PURE__*/React.createElement("select", {
     value: "",
     onChange: e => {
       const v = e.target.value;
       if (!v) return;
-      if (v === "__new__") onStartAddEngineer(c.id);else onToggleEngineer(c.id, v);
+      if (v === "__new__") onStartAddEngineer(slot.id);else onToggleEngineer(contractId, slot.id, v);
     },
     style: {
       ...selectStyle,
@@ -2476,12 +2566,12 @@ function ContractCard({
     }
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "+ Add engineer"), (engineersByRegion[c.region] || []).filter(n => !(c.engineers || []).includes(n)).map(name => /*#__PURE__*/React.createElement("option", {
+  }, "+ Add engineer"), (engineersByRegion[region] || []).filter(n => !engineers.includes(n)).map(name => /*#__PURE__*/React.createElement("option", {
     key: name,
     value: name
   }, name)), /*#__PURE__*/React.createElement("option", {
     value: "__new__"
-  }, "+ New Engineer")), addingEngineerFor === c.id && /*#__PURE__*/React.createElement("div", {
+  }, "+ New Engineer")), adding && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gap: 6
@@ -2490,7 +2580,7 @@ function ContractCard({
     autoFocus: true,
     value: newEngineerName,
     onChange: e => onNewEngineerNameChange(e.target.value.toUpperCase()),
-    onKeyDown: e => e.key === "Enter" && onConfirmAddEngineer(c.id),
+    onKeyDown: e => e.key === "Enter" && onConfirmAddEngineer(contractId, slot.id),
     placeholder: "ENGINEER NAME",
     style: {
       ...inputStyle,
@@ -2505,7 +2595,7 @@ function ContractCard({
     }
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
-    onClick: () => onConfirmAddEngineer(c.id),
+    onClick: () => onConfirmAddEngineer(contractId, slot.id),
     style: {
       flex: 1,
       background: "#4ADE9C",
@@ -2529,7 +2619,19 @@ function ContractCard({
     }
   }, /*#__PURE__*/React.createElement(XIcon, {
     size: 11
-  }))))))));
+  })))), hasEngineers && expanded && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onToggleExpandSlot(null),
+    style: {
+      background: "none",
+      border: "none",
+      color: "#565F5A",
+      fontSize: 11,
+      padding: "2px 0",
+      textAlign: "left",
+      textDecoration: "underline"
+    }
+  }, "Done"));
 }
 function IconBtn({
   children,
