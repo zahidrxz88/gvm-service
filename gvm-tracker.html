@@ -1183,7 +1183,8 @@ function Dashboard() {
           rooms: c.rooms,
           region: c.region,
           date: s.date,
-          status: s.status
+          status: s.status,
+          engineers: s.engineers
         });
       });
     });
@@ -1625,7 +1626,14 @@ function Dashboard() {
       style: {
         color: "#6E9FB0"
       }
-    }, " · ", item.region.toUpperCase())));
+    }, " · ", item.region.toUpperCase())), item.engineers && item.engineers.length > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "mono",
+      style: {
+        fontSize: isNext ? 13 : 11,
+        color: "#4ADE9C",
+        marginTop: 6
+      }
+    }, "ENGINEER · ", item.engineers.join(", ")));
   }))), /*#__PURE__*/React.createElement("section", {
     style: {
       marginBottom: 24
